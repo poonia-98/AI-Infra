@@ -45,18 +45,28 @@ jobs:
         working-directory: ${{ matrix.service }}
         run: GONOSUMDB=* GOTOOLCHAIN=local go mod tidy && go build ./...
 
-  integration-tests:
+      integration-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - run: docker compose up -d --wait
       - run: timeout 60s bash -c 'until curl -f http://localhost:8000/health; do sleep 2; done'
-      - run: |
+      - name: Run API tests
+        run: |
           # Create agent with a command (silent curl to avoid progress output)
-          curl -s -X POST http://localhost:8000/api/v1/agents \
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST http://localhost:8000/api/v1/agents \
             -H "Content-Type: application/json" \
-            -d '{"name":"ci-agent","image":"alpine:latest","config":{"command":"echo hello"}}' | tee /tmp/agent.json
+            -d '{"name":"ci-agent","image":"alpine:latest","config":{"command":"echo hello"}}')
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+          echo "$BODY" | tee /tmp/agent.json
+          echo "HTTP status: $HTTP_CODE"
+          if [ "$HTTP_CODE" -ne 200 ] && [ "$HTTP_CODE" -ne 201 ]; then
+            echo "Agent creation failed. Backend logs:"
+            docker compose logs backend --tail 50
+            exit 1
+          fi
           AGENT_ID=$(jq -r .id /tmp/agent.json)
           # Start agent
           curl -X POST http://localhost:8000/api/v1/agents/$AGENT_ID/start
