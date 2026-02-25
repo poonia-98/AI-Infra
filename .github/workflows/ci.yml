@@ -55,9 +55,13 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.21'
+          cache: false
       - name: Download dependencies
         working-directory: platform/${{ matrix.service }}
         run: go mod download
+      - name: Tidy
+        working-directory: platform/${{ matrix.service }}
+        run: go mod tidy
       - name: Run tests
         working-directory: platform/${{ matrix.service }}
         run: go test ./... -v
