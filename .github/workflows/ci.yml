@@ -56,15 +56,16 @@ jobs:
         with:
           go-version: '1.21'
           cache: false
-      - name: Download dependencies
+      - name: Tidy and test
         working-directory: platform/${{ matrix.service }}
-        run: go mod download
-      - name: Tidy
-        working-directory: platform/${{ matrix.service }}
-        run: go mod tidy
-      - name: Run tests
-        working-directory: platform/${{ matrix.service }}
-        run: go test ./... -v
+        env:
+          GONOSUMCHECK: "*"
+          GOFLAGS: "-mod=mod"
+          GOTOOLCHAIN: auto
+        run: |
+          go mod tidy
+          go mod download
+          go test ./... -v
 
   integration-tests:
     runs-on: ubuntu-latest
