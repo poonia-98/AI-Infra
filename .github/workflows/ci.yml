@@ -39,8 +39,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'          # ✅ Fixed: using Go 1.24
-          cache: false                 # (cache disabled for now)
+          go-version: '1.24'
+          cache: false
       - name: Build
         working-directory: ${{ matrix.service }}
         run: GONOSUMDB=* GOTOOLCHAIN=local go mod tidy && go build ./...
@@ -51,10 +51,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - run: docker compose up -d --wait
+      - name: Create database tables
+        run: docker exec platform-backend-1 python -c "
+          from database import engine, Base;
+          import asyncio;
+          async def create():
+              async with engine.begin() as conn:
+                  await conn.run_sync(Base.metadata.create_all);
+          asyncio.run(create())"
       - run: timeout 60s bash -c 'until curl -f http://localhost:8000/health; do sleep 2; done'
       - name: Run API tests
         run: |
-          # Create agent with a command (silent curl to avoid progress output)
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST http://localhost:8000/api/v1/agents \
             -H "Content-Type: application/json" \
             -d '{"name":"ci-agent","image":"alpine:latest","config":{"command":"echo hello"}}')
@@ -71,12 +78,9 @@ jobs:
           fi
           AGENT_ID=$(jq -r .id /tmp/agent.json)
           echo "✅ Agent created with ID: $AGENT_ID"
-          # Start agent
           curl -X POST http://localhost:8000/api/v1/agents/$AGENT_ID/start
           sleep 5
-          # Check logs
           curl -f "http://localhost:8000/api/v1/agents/$AGENT_ID/logs?limit=5"
-          # Stop and delete
           curl -X POST http://localhost:8000/api/v1/agents/$AGENT_ID/stop
           curl -X DELETE http://localhost:8000/api/v1/agents/$AGENT_ID
       - if: failure()
