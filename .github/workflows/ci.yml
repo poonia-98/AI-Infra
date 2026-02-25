@@ -58,14 +58,9 @@ jobs:
           cache: false
       - name: Test
         working-directory: platform/${{ matrix.service }}
-        env:
-          GONOSUMDB: "*"
-          GONOSUMCHECK: "*"
-          GOFLAGS: "-mod=mod"
-          GOTOOLCHAIN: auto
         run: |
-          go get ./...
-          go test ./... -v
+          GONOSUMDB='*' GOFLAGS='-mod=mod' GOTOOLCHAIN=auto go mod download
+          GONOSUMDB='*' GOFLAGS='-mod=mod' GOTOOLCHAIN=auto go test ./... -v
 
   integration-tests:
     runs-on: ubuntu-latest
