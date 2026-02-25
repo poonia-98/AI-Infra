@@ -45,23 +45,29 @@ jobs:
         working-directory: ${{ matrix.service }}
         run: GONOSUMDB=* GOTOOLCHAIN=local go mod tidy && go build ./...
 
-  integration-tests:
+    integration-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - run: docker compose up -d --wait
-      - name: Create database tables
-        run: docker exec platform-backend-1 python -c "
-          from database import engine, Base;
-          import asyncio;
-          async def create():
-              async with engine.begin() as conn:
-                  await conn.run_sync(Base.metadata.create_all);
-          asyncio.run(create())"
       - run: timeout 60s bash -c 'until curl -f http://localhost:8000/health; do sleep 2; done'
+      - name: Create database tables
+        run: |
+          docker exec platform-backend-1 python -c "
+from database import engine, Base
+import asyncio
+
+async def create_tables():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    print('Tables created')
+
+asyncio.run(create_tables())
+"
       - name: Run API tests
         run: |
+          # Create agent with a command (silent curl to avoid progress output)
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST http://localhost:8000/api/v1/agents \
             -H "Content-Type: application/json" \
             -d '{"name":"ci-agent","image":"alpine:latest","config":{"command":"echo hello"}}')
@@ -78,10 +84,14 @@ jobs:
           fi
           AGENT_ID=$(jq -r .id /tmp/agent.json)
           echo "✅ Agent created with ID: $AGENT_ID"
+          # Start agent
           curl -X POST http://localhost:8000/api/v1/agents/$AGENT_ID/start
           sleep 5
+          # Check logs
           curl -f "http://localhost:8000/api/v1/agents/$AGENT_ID/logs?limit=5"
+          # Stop and delete
           curl -X POST http://localhost:8000/api/v1/agents/$AGENT_ID/stop
           curl -X DELETE http://localhost:8000/api/v1/agents/$AGENT_ID
       - if: failure()
+        run: docker compose logs
         run: docker compose logs
