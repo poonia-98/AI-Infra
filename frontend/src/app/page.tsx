@@ -23,8 +23,8 @@ interface ChartPt  { t: number; label: string; cpu: number; mem: number; ev: num
 interface SparkPt  { i: number; v: number; }
 interface AgentLive { cpu: number; mem: number; execs: number; seen: string; }
 interface Feed {
-  id: string; ts: number; type: string; agentId: string; color: string;
-  label: string; level: 'ok' | 'info' | 'warn' | 'error';
+  id: string; ts: number; type: string; agentId: string; 
+  label: string; level: 'ok' | 'info' | 'warn' | 'error'; color: string;
 }
 
 /* ── Event classification map ───────────────────────────────── */
