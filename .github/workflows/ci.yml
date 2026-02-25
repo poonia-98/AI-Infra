@@ -49,6 +49,11 @@ jobs:
     strategy:
       matrix:
         service: [executor, metrics-collector, event-processor, websocket-gateway]
+    env:
+      GONOSUMDB: "*"
+      GOFLAGS: "-mod=mod"
+      GOTOOLCHAIN: auto
+      GOPATH: /home/runner/go
     steps:
       - uses: actions/checkout@v4
       - name: Set up Go
@@ -56,17 +61,11 @@ jobs:
         with:
           go-version: '1.21'
           cache: false
-      - name: Tidy and test
+      - name: Test
         working-directory: platform/${{ matrix.service }}
-        env:
-          GONOSUMCHECK: "*"
-          GOFLAGS: "-mod=mod"
-          GOTOOLCHAIN: auto
         run: |
           go mod tidy
-          go mod download
           go test ./... -v
-
   integration-tests:
     runs-on: ubuntu-latest
     steps:
