@@ -59,8 +59,9 @@ jobs:
       - name: Test
         working-directory: platform/${{ matrix.service }}
         run: |
-          GONOSUMDB='*' GOFLAGS='-mod=mod' GOTOOLCHAIN=auto go mod download
-          GONOSUMDB='*' GOFLAGS='-mod=mod' GOTOOLCHAIN=auto go test ./... -v
+          rm -f go.sum
+          GONOSUMDB=* go mod tidy
+          go test ./... -v
 
   integration-tests:
     runs-on: ubuntu-latest
