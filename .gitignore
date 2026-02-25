@@ -1,0 +1,70 @@
+# Python
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.pytest_cache/
+**/.coverage
+**/venv/
+**/env/
+**/ENV/
+**/env.bak/
+**/venv.bak/
+**/alembic/versions/*.py   # Optional: if you want to ignore migration scripts
+
+# Go
+**/*.exe
+**/*.test
+**/*.out
+**/vendor/
+
+# Node
+**/node_modules/
+**/dist/
+**/.next/
+**/build/
+**/coverage/
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+**/.pnpm-debug.log*
+
+# Docker
+**/.docker/
+**/*.tar
+**/*.tar.gz
+**/Dockerfile*          # Usually you want to commit Dockerfiles, so keep this line commented out if you want them tracked.
+# !**/Dockerfile        # Uncomment if you want to track Dockerfiles but ignore other docker artifacts.
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.DS_Store
+Thumbs.db
+
+# Environment files (secrets)
+**.env
+**.env.local
+**.env.production
+**.env.development
+**.env.test
+
+# Logs
+**/*.log
+
+# OS generated files
+**/.DS_Store
+**/Thumbs.db
+
+# Project specific (optional)
+**/backend/__pycache__/
+**/frontend/.next/
+**/frontend/build/
+**/frontend/coverage/
+**/executor/executor
+**/metrics-collector/metrics-collector
+**/event-processor/event-processor
+**/websocket-gateway/websocket-gateway

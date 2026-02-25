@@ -1,0 +1,7 @@
+{
+    "name": "simple-echo",
+    "image": "alpine:latest",
+    "config": {
+        "command": "echo hello world"
+    }
+}

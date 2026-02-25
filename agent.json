@@ -1,0 +1,5 @@
+{
+    "name": "log-generator",
+    "image": "python:3.11-slim",
+    "command": "python -c \"import time; counter=0; while True: print(f'LOG: counter={counter}'); counter+=1; time.sleep(5)\""
+}

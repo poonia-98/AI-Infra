@@ -1,0 +1,135 @@
+groups:
+  - name: platform_agent_alerts
+    interval: 30s
+    rules:
+      - alert: AgentContainerDown
+        expr: agent_status == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Agent container is down"
+          description: "Agent {{ $labels.agent_id }} container has been down for more than 1 minute."
+
+      - alert: AgentHighCPU
+        expr: agent_cpu_percent > 85
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Agent high CPU usage"
+          description: "Agent {{ $labels.agent_id }} CPU is {{ $value | printf \"%.1f\" }}% for more than 5 minutes."
+
+      - alert: AgentCriticalCPU
+        expr: agent_cpu_percent > 95
+        for: 2m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Agent critical CPU usage"
+          description: "Agent {{ $labels.agent_id }} CPU is {{ $value | printf \"%.1f\" }}% — approaching limit."
+
+      - alert: AgentHighMemory
+        expr: agent_memory_percent > 85
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Agent high memory usage"
+          description: "Agent {{ $labels.agent_id }} memory is {{ $value | printf \"%.1f\" }}%."
+
+      - alert: AgentCriticalMemory
+        expr: agent_memory_percent > 95
+        for: 2m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Agent memory near limit"
+          description: "Agent {{ $labels.agent_id }} memory at {{ $value | printf \"%.1f\" }}% — OOM risk."
+
+  - name: platform_service_alerts
+    interval: 30s
+    rules:
+      - alert: BackendDown
+        expr: up{job="backend"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "FastAPI backend is down"
+          description: "The control plane backend has been unreachable for 30 seconds."
+
+      - alert: ExecutorDown
+        expr: up{job="executor"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Go executor service is down"
+          description: "The executor service cannot be scraped — agents cannot be started."
+
+      - alert: MetricsCollectorDown
+        expr: up{job="metrics-collector"} == 0
+        for: 1m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Metrics collector is down"
+          description: "Agent metrics collection has stopped."
+
+      - alert: EventProcessorDown
+        expr: up{job="event-processor"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Event processor is down"
+          description: "NATS event processing pipeline is unavailable."
+
+  - name: platform_api_alerts
+    interval: 15s
+    rules:
+      - alert: HighAPIErrorRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+          /
+          sum(rate(http_requests_total[5m])) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "High API error rate"
+          description: "More than 5% of API requests are returning 5xx errors."
+
+      - alert: HighAPILatency
+        expr: |
+          histogram_quantile(0.99,
+            sum by(le) (rate(http_request_duration_seconds_bucket[5m]))
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "High API latency"
+          description: "P99 latency is above 2 seconds."
+
+      - alert: NoRunningAgents
+        expr: platform_running_agents == 0 and platform_total_agents > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "No running agents"
+          description: "Agents exist but none are running — possible platform issue."

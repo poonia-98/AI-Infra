@@ -1,0 +1,58 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Platform Event Schema",
+  "version": "1.0.0",
+  "definitions": {
+    "BaseEvent": {
+      "type": "object",
+      "required": ["event_type", "agent_id", "timestamp", "source"],
+      "properties": {
+        "event_type":   { "type": "string" },
+        "agent_id":     { "type": "string", "format": "uuid" },
+        "execution_id": { "type": "string", "format": "uuid" },
+        "timestamp":    { "type": "string", "format": "date-time" },
+        "source":       { "type": "string" },
+        "payload":      { "type": "object" }
+      }
+    },
+    "LogEvent": {
+      "type": "object",
+      "required": ["agent_id", "message", "level", "timestamp"],
+      "properties": {
+        "agent_id":     { "type": "string", "format": "uuid" },
+        "execution_id": { "type": "string", "format": "uuid" },
+        "message":      { "type": "string" },
+        "level":        { "type": "string", "enum": ["debug", "info", "warn", "warning", "error", "fatal"] },
+        "source":       { "type": "string" },
+        "timestamp":    { "type": "string", "format": "date-time" },
+        "metadata":     { "type": "object" }
+      }
+    },
+    "MetricEvent": {
+      "type": "object",
+      "required": ["agent_id", "metric_name", "metric_value", "timestamp"],
+      "properties": {
+        "agent_id":     { "type": "string", "format": "uuid" },
+        "metric_name":  { "type": "string" },
+        "metric_value": { "type": "number" },
+        "labels":       { "type": "object" },
+        "timestamp":    { "type": "string", "format": "date-time" }
+      }
+    }
+  },
+  "event_types": {
+    "agent.created":   { "description": "Agent registered in platform" },
+    "agent.started":   { "description": "Agent container started" },
+    "agent.stopped":   { "description": "Agent container stopped" },
+    "agent.failed":    { "description": "Agent encountered fatal error" },
+    "agent.completed": { "description": "Agent task completed" },
+    "agent.deleted":   { "description": "Agent removed from platform" },
+    "agent.heartbeat": { "description": "Periodic liveness signal" }
+  },
+  "nats_subjects": {
+    "agents.events":  "Agent lifecycle events",
+    "logs.stream":    "Real-time log entries",
+    "events.stream":  "Platform events",
+    "metrics.stream": "Performance metrics"
+  }
+}

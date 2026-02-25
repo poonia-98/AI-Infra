@@ -1,0 +1,104 @@
+platform:
+  name: "AI Agent Infrastructure Platform"
+  version: "1.0.0"
+  environment: production
+
+services:
+  backend:
+    name: backend
+    language: python
+    framework: fastapi
+    port: 8000
+    internal_url: "http://backend:8000"
+    health_path: "/health"
+    metrics_path: "/metrics"
+    docs_path: "/docs"
+
+  executor:
+    name: executor
+    language: go
+    port: 8081
+    internal_url: "http://executor:8081"
+    health_path: "/health"
+    metrics_path: "/metrics"
+    description: "Docker container lifecycle manager"
+
+  event-processor:
+    name: event-processor
+    language: go
+    port: 8082
+    internal_url: "http://event-processor:8082"
+    health_path: "/health"
+    metrics_path: "/metrics"
+    description: "NATS event routing and forwarding"
+
+  metrics-collector:
+    name: metrics-collector
+    language: go
+    port: 8083
+    internal_url: "http://metrics-collector:8083"
+    health_path: "/health"
+    metrics_path: "/metrics"
+    description: "Docker stats + Prometheus exporter"
+
+  ws-gateway:
+    name: ws-gateway
+    language: go
+    port: 8084
+    internal_url: "http://ws-gateway:8084"
+    health_path: "/health"
+    ws_path: "/ws"
+    broadcast_path: "/broadcast"
+    description: "WebSocket real-time streaming gateway"
+
+  frontend:
+    name: frontend
+    language: typescript
+    framework: nextjs
+    port: 3000
+    internal_url: "http://frontend:3000"
+
+infrastructure:
+  postgres:
+    port: 5432
+    database: agentdb
+    internal_url: "postgresql://postgres:5432/agentdb"
+
+  redis:
+    port: 6379
+    internal_url: "redis://redis:6379"
+
+  nats:
+    port: 4222
+    monitor_port: 8222
+    internal_url: "nats://nats:4222"
+
+  prometheus:
+    port: 9090
+    internal_url: "http://prometheus:9090"
+    scrape_interval: 15s
+
+  grafana:
+    port: 3000
+    internal_url: "http://grafana:3000"
+    default_user: admin
+
+  otel-collector:
+    grpc_port: 4317
+    http_port: 4318
+    metrics_port: 8888
+    health_port: 13133
+    internal_url: "http://otel-collector:4317"
+
+nats_subjects:
+  agents_events: "agents.events"
+  logs_stream: "logs.stream"
+  events_stream: "events.stream"
+  metrics_stream: "metrics.stream"
+
+agent_defaults:
+  image: "agent-runtime:latest"
+  network: "platform_network"
+  cpu_limit: 1.0
+  memory_limit: "512m"
+  restart_policy: "no"
