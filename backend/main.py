@@ -22,7 +22,7 @@ from services.agent_service import agent_service
 from sqlalchemy import update
 import json
 from config import settings
-
+from database import engine, Base
 logger = structlog.get_logger()
 START_TIME = time.time()
 
@@ -122,13 +122,17 @@ app = FastAPI(
 )
 @app.on_event("startup")
 async def startup():
+    # Create database tables
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    # Connect to Redis and NATS
     await redis_service.connect()
     await nats_service.connect()
 
 @app.on_event("shutdown")
 async def shutdown():
     await redis_service.disconnect()
-    await nats_service.disconnect()
+    await nats_service.drain()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
