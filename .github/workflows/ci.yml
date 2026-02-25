@@ -1,11 +1,10 @@
 name: CI Pipeline
-
 on:
   push:
     branches: [ main, develop, master]
   pull_request:
     branches: [ main ]
-  workflow_dispatch:  # allows manual trigger
+  workflow_dispatch:
 
 jobs:
   backend-unit-tests:
@@ -55,7 +54,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.21'
+      - name: Download dependencies
+        working-directory: ${{ matrix.service }}
+        run: go mod download
       - name: Run tests
         working-directory: ${{ matrix.service }}
         run: go test ./... -v
@@ -73,10 +75,9 @@ jobs:
           timeout 60s bash -c 'until curl -f http://localhost:8000/health; do sleep 2; done'
       - name: Run API tests
         run: |
-          # Simple smoke test: create an agent
           curl -X POST http://localhost:8000/api/v1/agents \
             -H "Content-Type: application/json" \
-            -d '{"name":"ci-test-agent","image":"alpine:latest","config":{"command":"echo hello"}}' | tee /tmp/agent.json
+            -d '{"name":"ci-test-agent","image":"alpine:latest","agent_type":"langgraph","config":{}}' | tee /tmp/agent.json
           AGENT_ID=$(jq -r .id /tmp/agent.json)
           curl -X POST http://localhost:8000/api/v1/agents/$AGENT_ID/start
           sleep 5
@@ -87,7 +88,6 @@ jobs:
         if: failure()
         run: docker compose logs
 
-  # Optional performance test (nightly or manual)
   performance-test:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
@@ -101,8 +101,7 @@ jobs:
           tar xzf k6.tar.gz
           sudo mv k6-v0.54.0-linux-amd64/k6 /usr/local/bin/
       - name: Run k6 test
-        run: |
-          k6 run api-load-test.js --out json=results.json
+        run: k6 run api-load-test.js --out json=results.json
       - name: Archive results
         uses: actions/upload-artifact@v4
         with:
