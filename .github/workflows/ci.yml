@@ -45,29 +45,28 @@ jobs:
         working-directory: ${{ matrix.service }}
         run: GONOSUMDB=* GOTOOLCHAIN=local go mod tidy && go build ./...
 
-    integration-tests:
+  integration-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - run: docker compose up -d --wait
-      - run: timeout 60s bash -c 'until curl -f http://localhost:8000/health; do sleep 2; done'
       - name: Create database tables
         run: |
           docker exec platform-backend-1 python -c "
-from database import engine, Base
 import asyncio
+from database import engine, Base
 
 async def create_tables():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    print('Tables created')
+    print('✅ Tables created')
 
 asyncio.run(create_tables())
 "
+      - run: timeout 60s bash -c 'until curl -f http://localhost:8000/health; do sleep 2; done'
       - name: Run API tests
         run: |
-          # Create agent with a command (silent curl to avoid progress output)
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST http://localhost:8000/api/v1/agents \
             -H "Content-Type: application/json" \
             -d '{"name":"ci-agent","image":"alpine:latest","config":{"command":"echo hello"}}')
@@ -84,14 +83,31 @@ asyncio.run(create_tables())
           fi
           AGENT_ID=$(jq -r .id /tmp/agent.json)
           echo "✅ Agent created with ID: $AGENT_ID"
-          # Start agent
           curl -X POST http://localhost:8000/api/v1/agents/$AGENT_ID/start
           sleep 5
-          # Check logs
           curl -f "http://localhost:8000/api/v1/agents/$AGENT_ID/logs?limit=5"
-          # Stop and delete
           curl -X POST http://localhost:8000/api/v1/agents/$AGENT_ID/stop
           curl -X DELETE http://localhost:8000/api/v1/agents/$AGENT_ID
       - if: failure()
         run: docker compose logs
-        run: docker compose logs
+
+  performance-test:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start services
+        run: docker compose up -d --wait
+      - name: Install k6
+        run: |
+          curl -L -o k6.tar.gz https://github.com/grafana/k6/releases/download/v0.54.0/k6-v0.54.0-linux-amd64.tar.gz
+          tar xzf k6.tar.gz
+          sudo mv k6-v0.54.0-linux-amd64/k6 /usr/local/bin/
+      - name: Run k6 test
+        run: |
+          k6 run api-load-test.js --out json=results.json
+      - name: Archive results
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-results
+          path: results.json
