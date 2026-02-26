@@ -13,7 +13,7 @@ import {
   AreaChart, Area, LineChart, Line, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
-import { api, SystemHealth, Agent, Log } from '@/lib/api';
+import { api, SystemHealth, Agent, Log, Alert } from '@/lib/api';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { format, formatDistanceToNow } from 'date-fns';
 import clsx from 'clsx';
@@ -23,7 +23,7 @@ interface ChartPt  { t: number; label: string; cpu: number; mem: number; ev: num
 interface SparkPt  { i: number; v: number; }
 interface AgentLive { cpu: number; mem: number; execs: number; seen: string; }
 interface Feed {
-  id: string; ts: number; type: string; agentId: string; 
+  id: string; ts: number; type: string; agentId: string;
   label: string; level: 'ok' | 'info' | 'warn' | 'error'; color: string;
 }
 
@@ -165,6 +165,13 @@ function KpiCard({
       <div style={{ marginTop: 4, opacity: sparks.length > 1 ? 1 : 0.3 }}>
         <Spark data={sparks} color={active ? accent : 'var(--ink-3)'} height={26} />
       </div>
+
+      {/* ════════ FLOATING DEPLOY BUTTON ════════ */}
+      <button className="deploy-fab" onClick={() => window.location.href = '/agents'}>
+        <span style={{ fontSize: 14, lineHeight: 1 }}>+</span>
+        DEPLOY AGENT
+      </button>
+
     </div>
   );
 }
@@ -271,6 +278,13 @@ function AreaPanel({ title, icon, color, dataKey, data, unit, id: gId }: {
           </ResponsiveContainer>
         )}
       </div>
+
+      {/* ════════ FLOATING DEPLOY BUTTON ════════ */}
+      <button className="deploy-fab" onClick={() => window.location.href = '/agents'}>
+        <span style={{ fontSize: 14, lineHeight: 1 }}>+</span>
+        DEPLOY AGENT
+      </button>
+
     </div>
   );
 }
@@ -325,6 +339,13 @@ function BarPanel({ title, icon, color, dataKey, data }: {
           </ResponsiveContainer>
         )}
       </div>
+
+      {/* ════════ FLOATING DEPLOY BUTTON ════════ */}
+      <button className="deploy-fab" onClick={() => window.location.href = '/agents'}>
+        <span style={{ fontSize: 14, lineHeight: 1 }}>+</span>
+        DEPLOY AGENT
+      </button>
+
     </div>
   );
 }
@@ -439,6 +460,13 @@ function LogStream({ logs }: { logs: Log[] }) {
         })}
         <div ref={bottomRef} />
       </div>
+
+      {/* ════════ FLOATING DEPLOY BUTTON ════════ */}
+      <button className="deploy-fab" onClick={() => window.location.href = '/agents'}>
+        <span style={{ fontSize: 14, lineHeight: 1 }}>+</span>
+        DEPLOY AGENT
+      </button>
+
     </div>
   );
 }
@@ -450,6 +478,7 @@ function LogStream({ logs }: { logs: Log[] }) {
 export default function DashboardPage() {
   const [health, setHealth]       = useState<SystemHealth | null>(null);
   const [agents, setAgents]       = useState<Agent[]>([]);
+  const [activeAlerts, setActiveAlerts] = useState<Alert[]>([]);
   const [feed, setFeed]           = useState<Feed[]>([]);
   const [logs, setLogs]           = useState<Log[]>([]);
   const [chart, setChart]         = useState<ChartPt[]>([]);
@@ -504,13 +533,15 @@ export default function DashboardPage() {
   /* Initial fetch */
   const fetchAll = useCallback(async () => {
     try {
-      const [h, ags, evs, ls] = await Promise.all([
+      const [h, ags, evs, ls, als] = await Promise.all([
         api.system.health(), api.agents.list(),
         api.events.list(60), api.logs.list(100),
+        api.alerts.list(false),
       ]);
       setHealth(h);
       setAgents(ags);
       setLogs(ls);
+      setActiveAlerts(als);
       const items: Feed[] = evs
         .map(e => {
           const c = classify(e.event_type);
@@ -559,10 +590,29 @@ export default function DashboardPage() {
 
     const unsubMet = subscribe('metrics.stream', msg => {
       const d = msg.data;
-      const agentId = String(d.agent_id     ?? '');
-      const name    = String(d.metric_name  ?? '');
-      const val     = Number(d.metric_value ?? 0);
+      // Collector publishes snapshot: {agent_id, cpu_percent, memory_mb, memory_percent, ...}
+      // Also handle legacy single-metric format: {agent_id, metric_name, metric_value}
+      const agentId = String(d.agent_id ?? '');
       if (!agentId) return;
+
+      // Snapshot format (from metrics-collector)
+      if (d.cpu_percent !== undefined || d.memory_mb !== undefined) {
+        const cpu = Number(d.cpu_percent ?? 0);
+        const mem = Number(d.memory_mb   ?? 0);
+        acc.current.cpuSum += cpu; acc.current.cpuN++;
+        acc.current.memSum += mem; acc.current.memN++;
+        setAgentLive(prev => {
+          const next = new Map(prev);
+          const cur = next.get(agentId) ?? { cpu: 0, mem: 0, execs: 0, seen: '' };
+          next.set(agentId, { ...cur, cpu, mem, seen: new Date().toISOString() });
+          return next;
+        });
+        return;
+      }
+
+      // Legacy single-metric format
+      const name = String(d.metric_name  ?? '');
+      const val  = Number(d.metric_value ?? 0);
       if (name === 'cpu_percent') { acc.current.cpuSum += val; acc.current.cpuN++; }
       if (name === 'memory_mb')   { acc.current.memSum += val; acc.current.memN++; }
       setAgentLive(prev => {
@@ -570,8 +620,8 @@ export default function DashboardPage() {
         const cur = next.get(agentId) ?? { cpu: 0, mem: 0, execs: 0, seen: '' };
         next.set(agentId, {
           ...cur,
-          cpu:  name === 'cpu_percent' ? val : cur.cpu,
-          mem:  name === 'memory_mb'   ? val : cur.mem,
+          cpu: name === 'cpu_percent' ? val : cur.cpu,
+          mem: name === 'memory_mb'   ? val : cur.mem,
           seen: new Date().toISOString(),
         });
         return next;
@@ -700,7 +750,7 @@ export default function DashboardPage() {
       <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
 
         {/* ════════════════ KPI STRIP ════════════════ */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(9, 1fr)', gap: 6 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 6 }}>
           {[
             { label: 'TOTAL AGENTS', value: totalAgents,             icon: Bot,           color: 'cyan',    accent: 'var(--cyan)',    sp: spk.current.cpu.map((_,i) => ({i,v:totalAgents})) },
             { label: 'RUNNING',      value: runningAgents,           icon: Play,          color: 'lime',    accent: 'var(--lime)',    sp: spk.current.evRate },
@@ -719,7 +769,7 @@ export default function DashboardPage() {
         </div>
 
         {/* ════════════════ ACTIVITY FEED + SERVICE HEALTH ════════════════ */}
-        <div style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 10 }}>
+        <div className="grid-2col" style={{ display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 10 }}>
 
           {/* Activity feed */}
           <div className="panel panel-glow" style={{ height: 340, display: 'flex', flexDirection: 'column' }}>
@@ -816,7 +866,7 @@ export default function DashboardPage() {
         </div>
 
         {/* ════════════════ CHARTS 2×2 ════════════════ */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div className="grid-charts" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <AreaPanel title="CPU UTILIZATION" id="g-cpu"
             icon={<Cpu style={{ width: 10, height: 10, color: 'var(--cyan)' }} />}
             color="var(--cyan)" dataKey="cpu" data={chart} unit="%" />
@@ -853,7 +903,7 @@ export default function DashboardPage() {
               MANAGE <ArrowUpRight style={{ width: 9, height: 9 }} />
             </Link>
           </div>
-          <div style={{ overflowX: 'auto' }}>
+          <div className="table-scroll">
             <table className="op-table">
               <thead>
                 <tr>
@@ -901,6 +951,13 @@ export default function DashboardPage() {
         </div>
 
       </div>
+
+      {/* ════════ FLOATING DEPLOY BUTTON ════════ */}
+      <button className="deploy-fab" onClick={() => window.location.href = '/agents'}>
+        <span style={{ fontSize: 14, lineHeight: 1 }}>+</span>
+        DEPLOY AGENT
+      </button>
+
     </div>
   );
 }
