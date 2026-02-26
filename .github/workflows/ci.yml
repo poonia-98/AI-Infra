@@ -50,20 +50,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - run: docker compose up -d --wait
-      - run: |
-          echo "Waiting for backend..."
-          timeout 90s bash -c 'until curl -sf http://localhost:8000/health; do sleep 3; done'
-          echo "Backend ready"
-      - run: |
-          curl -X POST http://localhost:8000/api/v1/agents \
+      - run: docker compose up -d
+      - name: Wait for backend
+        run: |
+          for i in $(seq 1 30); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health)
+            echo "Attempt $i: $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "Ready"; break; fi
+            sleep 5
+          done
+      - name: Smoke test
+        run: |
+          BODY=$(curl -sf -X POST http://localhost:8000/api/v1/agents \
             -H "Content-Type: application/json" \
-            -d '{"name":"ci-agent","image":"alpine:latest","agent_type":"langgraph","config":{}}' | tee /tmp/agent.json
-          AGENT_ID=$(jq -r .id /tmp/agent.json)
-          curl -X POST http://localhost:8000/api/v1/agents/$AGENT_ID/start
+            -d '{"name":"ci-agent","image":"alpine:latest","agent_type":"langgraph","config":{}}')
+          echo "$BODY"
+          AGENT_ID=$(echo "$BODY" | jq -r .id)
+          if [ "$AGENT_ID" = "null" ] || [ -z "$AGENT_ID" ]; then
+            echo "Failed to create agent"
+            docker compose logs backend --tail 30
+            exit 1
+          fi
+          curl -sf -X POST http://localhost:8000/api/v1/agents/$AGENT_ID/start
           sleep 5
-          curl -f "http://localhost:8000/api/v1/agents/$AGENT_ID/logs?limit=5"
-          curl -X POST http://localhost:8000/api/v1/agents/$AGENT_ID/stop
-          curl -X DELETE http://localhost:8000/api/v1/agents/$AGENT_ID
+          curl -sf "http://localhost:8000/api/v1/agents/$AGENT_ID/logs?limit=5"
+          curl -sf -X POST http://localhost:8000/api/v1/agents/$AGENT_ID/stop
+          curl -sf -X DELETE http://localhost:8000/api/v1/agents/$AGENT_ID
+          echo "All checks passed"
       - if: failure()
         run: docker compose logs
