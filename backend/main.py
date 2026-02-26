@@ -4,6 +4,8 @@ import structlog
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -22,7 +24,7 @@ from services.agent_service import agent_service
 from sqlalchemy import update
 import json
 from config import settings
-from database import engine, Base
+
 logger = structlog.get_logger()
 START_TIME = time.time()
 
@@ -94,6 +96,17 @@ async def nats_event_handler(msg):
 async def lifespan(app: FastAPI):
     logger.info("Starting AI Agent Infrastructure Platform")
 
+    # Create all tables with retry (postgres may not be ready immediately)
+    for attempt in range(10):
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            logger.info("Database tables ensured")
+            break
+        except Exception as e:
+            logger.warning(f"DB not ready (attempt {attempt+1}/10): {e}")
+            await asyncio.sleep(3)
+
     try:
         await redis_service.connect(settings.REDIS_URL)
         logger.info("Redis connected")
@@ -120,26 +133,28 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
-@app.on_event("startup")
-async def startup():
-    # Create database tables
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    # Connect to Redis and NATS
-    await redis_service.connect()
-    await nats_service.connect()
 
-@app.on_event("shutdown")
-async def shutdown():
-    await redis_service.disconnect()
-    await nats_service.drain()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Cross-Origin-Resource-Policy"] = "cross-origin"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
 
 setup_telemetry(app)
 Instrumentator().instrument(app).expose(app)
