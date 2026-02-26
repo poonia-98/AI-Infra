@@ -4,7 +4,7 @@ import httpx
 from datetime import datetime, timezone
 from typing import Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, update
+from sqlalchemy import select, func, update, delete
 from models import Agent, Execution, Log, Event, Metric, Container
 from schemas import AgentCreate, AgentUpdate
 from services.redis_service import redis_service
@@ -34,8 +34,7 @@ class AgentService:
         db.add(agent)
         await db.flush()
         await db.refresh(agent)
-        if redis_service.client is None:
-            await redis_service.connect()
+
         await redis_service.set_agent_state(str(agent.id), {
             "status": "created", "created_at": agent.created_at.isoformat(),
         })
@@ -74,7 +73,15 @@ class AgentService:
             return False
         if agent.status == "running":
             await self.stop_agent(db, agent_id)
-        await db.delete(agent)
+        # Use explicit SQL deletes to avoid async lazy-load cascade failure
+        from models import AlertRule, Alert
+        await db.execute(delete(Alert).where(Alert.agent_id == agent_id))
+        await db.execute(delete(Container).where(Container.agent_id == agent_id))
+        await db.execute(delete(Metric).where(Metric.agent_id == agent_id))
+        await db.execute(delete(Event).where(Event.agent_id == agent_id))
+        await db.execute(delete(Log).where(Log.agent_id == agent_id))
+        await db.execute(delete(Execution).where(Execution.agent_id == agent_id))
+        await db.execute(delete(Agent).where(Agent.id == agent_id))
         await redis_service.delete_agent_state(str(agent_id))
         await nats_service.publish("agents.events", {
             "event_type": "agent.deleted", "agent_id": str(agent_id),
@@ -105,10 +112,6 @@ class AgentService:
                 result = response.json()
 
             if result.get("success"):
-                # Ensure Redis is connected before using it
-                if redis_service.client is None:
-                    await redis_service.connect()
-
                 stmt = update(Agent).where(Agent.id == agent_id).values(
                     status="running",
                     container_id=result.get("container_id"),
@@ -170,10 +173,6 @@ class AgentService:
                 result = response.json()
 
             if result.get("success"):
-                # Ensure Redis is connected before using it
-                if redis_service.client is None:
-                    await redis_service.connect()
-
                 await self._update_agent_status(db, agent_id, "stopped")
                 # Update container record
                 from sqlalchemy import update as sa_update
@@ -225,15 +224,16 @@ class AgentService:
             if agent.auto_restart and agent.restart_count < 5:
                 import asyncio
                 await asyncio.sleep(5)
-                from database import AsyncSessionLocal
-                async with AsyncSessionLocal() as restart_db:
+                from database import AsyncSessionLocal as ASL
+                async with ASL() as restart_db:
                     stmt2 = update(Agent).where(Agent.id == agent_id).values(
                         restart_count=Agent.restart_count + 1
                     )
                     await restart_db.execute(stmt2)
-                    await self.start_agent(restart_db, agent_id)
+                    result = await self.start_agent(restart_db, agent_id)
                     await restart_db.commit()
-                    logger.info("Auto-restarted agent", agent_id=agent_id_str)
+                    if result.get("success"):
+                        logger.info("Auto-restarted agent", agent_id=agent_id_str)
         except Exception as e:
             logger.error("Auto-restart failed", agent_id=agent_id_str, error=str(e))
 
@@ -245,6 +245,7 @@ class AgentService:
         await db.execute(stmt)
 
     async def get_system_health(self, db: AsyncSession) -> dict[str, Any]:
+        from models import Alert as AlertModel
         total_agents = await db.scalar(select(func.count(Agent.id)))
         running_agents = await db.scalar(select(func.count(Agent.id)).where(Agent.status == "running"))
         failed_agents = await db.scalar(select(func.count(Agent.id)).where(Agent.status == "error"))
@@ -252,7 +253,9 @@ class AgentService:
         active_executions = await db.scalar(
             select(func.count(Execution.id)).where(Execution.status.in_(["pending", "running"]))
         )
-        total_alerts = await db.scalar(select(func.count()).select_from(__import__('models').Alert).where(__import__('models').Alert.resolved == False))
+        total_alerts = await db.scalar(
+            select(func.count()).select_from(AlertModel).where(AlertModel.resolved == False)
+        )
 
         redis_ok = await redis_service.ping()
         nats_ok = nats_service.is_connected()
