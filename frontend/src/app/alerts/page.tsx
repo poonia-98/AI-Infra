@@ -34,10 +34,20 @@ export default function AlertsPage() {
 
   const fetchAlerts = useCallback(async () => {
     try {
-      const [a, c] = await Promise.all([
-        api.alerts.list(filter === 'all' ? undefined : filter),
-        api.alerts.counts(),
-      ]);
+      // Convert filter string to resolved boolean
+let resolvedParam: boolean | undefined;
+if (filter === 'all') {
+  resolvedParam = undefined;
+} else if (filter === 'resolved') {
+  resolvedParam = true;      // show resolved alerts
+} else { // 'active'
+  resolvedParam = false;     // show unresolved (active) alerts
+}
+
+const [a, c] = await Promise.all([
+  api.alerts.list(resolvedParam),
+  api.alerts.counts(),
+]);
       setAlerts(a); setCounts(c);
     } catch {} finally { setLoading(false); }
   }, [filter]);

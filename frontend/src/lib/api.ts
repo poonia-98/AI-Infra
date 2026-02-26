@@ -101,10 +101,14 @@ export const api = {
     list: (limit = 100) => request<Log[]>(`/api/v1/logs?limit=${limit}`),
   },
   alerts: {
-    list:    (status?: string) => request<Alert[]>(`/api/v1/alerts${status ? `?status=${status}` : ''}`),
-    counts:  ()                => request<AlertCounts>('/api/v1/alerts/counts'),
-    resolve: (id: string)      => request<Alert>(`/api/v1/alerts/${id}/resolve`, { method: 'POST' }),
+  list: (resolved?: boolean) => {
+    const params = new URLSearchParams();
+    if (resolved !== undefined) params.set('resolved', String(resolved));
+    return request<Alert[]>(`/api/v1/alerts?${params}`);
   },
+  counts:  () => request<AlertCounts>('/api/v1/alerts/counts'),
+  resolve: (id: string) => request<Alert>(`/api/v1/alerts/${id}/resolve`, { method: 'POST' }),
+},
   analytics: {
     summary:       () => request<AnalyticsSummary>('/api/v1/analytics/summary'),
     eventsHistory: (range = '1h') => request<Event[]>(`/api/v1/analytics/events/history?range=${range}`),
