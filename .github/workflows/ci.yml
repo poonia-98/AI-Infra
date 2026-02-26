@@ -39,8 +39,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'          # ✅ Fixed: using Go 1.24
-          cache: false                 # (cache disabled for now)
+          go-version: '1.24'
+          cache: false
       - name: Build
         working-directory: ${{ matrix.service }}
         run: GONOSUMDB=* GOTOOLCHAIN=local go mod tidy && go build ./...
@@ -50,34 +50,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - run: docker compose up -d --wait
-      - run: timeout 60s bash -c 'until curl -f http://localhost:8000/health; do sleep 2; done'
-      - name: Run API tests
+      - run: docker compose up -d
+      - name: Wait for backend
         run: |
-          # Create agent with a command (silent curl to avoid progress output)
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST http://localhost:8000/api/v1/agents \
+          for i in $(seq 1 30); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health)
+            echo "Attempt $i: $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "Ready"; break; fi
+            sleep 5
+          done
+      - name: Smoke test
+        run: |
+          BODY=$(curl -sf -X POST http://localhost:8000/api/v1/agents \
             -H "Content-Type: application/json" \
-            -d '{"name":"ci-agent","image":"alpine:latest","config":{"command":"echo hello"}}')
-          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-          BODY=$(echo "$RESPONSE" | head -n -1)
-          echo "$BODY" | tee /tmp/agent.json
-          echo "HTTP status: $HTTP_CODE"
-          if [ "$HTTP_CODE" -ne 200 ] && [ "$HTTP_CODE" -ne 201 ]; then
-            echo "❌ Agent creation failed with status $HTTP_CODE. Response body:"
-            echo "$BODY"
-            echo "📜 Backend logs:"
-            docker compose logs backend --tail 50
+            -d '{"name":"ci-agent","image":"alpine:latest","agent_type":"langgraph","config":{}}')
+          echo "$BODY"
+          AGENT_ID=$(echo "$BODY" | jq -r .id)
+          if [ "$AGENT_ID" = "null" ] || [ -z "$AGENT_ID" ]; then
+            echo "Failed to create agent"
+            docker compose logs backend --tail 30
             exit 1
           fi
-          AGENT_ID=$(jq -r .id /tmp/agent.json)
-          echo "✅ Agent created with ID: $AGENT_ID"
-          # Start agent
-          curl -X POST http://localhost:8000/api/v1/agents/$AGENT_ID/start
+          curl -sf -X POST http://localhost:8000/api/v1/agents/$AGENT_ID/start
           sleep 5
-          # Check logs
-          curl -f "http://localhost:8000/api/v1/agents/$AGENT_ID/logs?limit=5"
-          # Stop and delete
-          curl -X POST http://localhost:8000/api/v1/agents/$AGENT_ID/stop
-          curl -X DELETE http://localhost:8000/api/v1/agents/$AGENT_ID
+          curl -sf "http://localhost:8000/api/v1/agents/$AGENT_ID/logs?limit=5"
+          curl -sf -X POST http://localhost:8000/api/v1/agents/$AGENT_ID/stop
+          curl -sf -X DELETE http://localhost:8000/api/v1/agents/$AGENT_ID
+          echo "All checks passed"
       - if: failure()
         run: docker compose logs
