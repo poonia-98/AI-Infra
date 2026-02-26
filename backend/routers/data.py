@@ -248,7 +248,8 @@ async def resolve_alert(alert_id: uuid.UUID, db: AsyncSession = Depends(get_db))
 
 @alerts_router.get("/rules", response_model=list[AlertRuleResponse])
 async def list_alert_rules(db: AsyncSession = Depends(get_db)):
-    return await alert_service.list_rules(db)
+    rules = await alert_service.list_rules(db)
+    return [AlertRuleResponse.from_orm(r) for r in rules]
 
 
 @alerts_router.post("/rules", response_model=AlertRuleResponse, status_code=201)
@@ -264,7 +265,10 @@ async def list_containers(
     db: AsyncSession = Depends(get_db)
 ):
     q = select(Container).order_by(desc(Container.created_at)).limit(limit)
-    if agent_id:
-        q = q.where(Container.agent_id == uuid.UUID(agent_id))
+    if agent_id and agent_id.strip():
+        try:
+            q = q.where(Container.agent_id == uuid.UUID(agent_id))
+        except ValueError:
+            pass
     result = await db.execute(q)
-    return list(result.scalars().all())
+    return [ContainerResponse.from_orm(c) for c in result.scalars().all()]
