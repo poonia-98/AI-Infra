@@ -1,0 +1,61 @@
+{{- if .Values.reconciliation.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-platform.component.fullname" (dict "root" . "component" "reconciliation") }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reconciliation
+spec:
+  replicas: {{ .Values.reconciliation.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ai-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: reconciliation
+  template:
+    metadata:
+      labels:
+        {{- include "ai-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: reconciliation
+    spec:
+      containers:
+        - name: reconciliation
+          image: {{ include "ai-platform.image" (dict "root" . "image" .Values.reconciliation.image) }}
+          imagePullPolicy: {{ .Values.reconciliation.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.reconciliation.service.port }}
+          env:
+            - name: PORT
+              value: {{ .Values.reconciliation.service.port | quote }}
+            - name: DATABASE_URL
+              value: {{ include "ai-platform.dbUrl" . }}
+            - name: NATS_URL
+              value: {{ .Values.global.natsUrl | quote }}
+            - name: CONTROL_PLANE_URL
+              value: {{ .Values.global.controlPlaneUrl | quote }}
+            - name: RECONCILE_INTERVAL
+              value: {{ .Values.reconciliation.env.reconcileInterval | quote }}
+            - name: NODE_HEARTBEAT_TTL
+              value: {{ .Values.reconciliation.env.nodeHeartbeatTtl | quote }}
+            - name: STUCK_STARTING_TTL
+              value: {{ .Values.reconciliation.env.stuckStartingTtl | quote }}
+          resources:
+            {{- toYaml .Values.reconciliation.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-platform.component.fullname" (dict "root" . "component" "reconciliation") }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reconciliation
+spec:
+  type: {{ .Values.reconciliation.service.type }}
+  selector:
+    {{- include "ai-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: reconciliation
+  ports:
+    - port: {{ .Values.reconciliation.service.port }}
+      targetPort: {{ .Values.reconciliation.service.port }}
+      name: http
+{{- end }}

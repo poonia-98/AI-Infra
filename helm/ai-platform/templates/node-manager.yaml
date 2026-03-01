@@ -1,0 +1,53 @@
+{{- if .Values.nodeManager.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-platform.component.fullname" (dict "root" . "component" "node-manager") }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node-manager
+spec:
+  replicas: {{ .Values.nodeManager.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ai-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: node-manager
+  template:
+    metadata:
+      labels:
+        {{- include "ai-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: node-manager
+    spec:
+      containers:
+        - name: node-manager
+          image: {{ include "ai-platform.image" (dict "root" . "image" .Values.nodeManager.image) }}
+          imagePullPolicy: {{ .Values.nodeManager.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.nodeManager.service.port }}
+          env:
+            - name: PORT
+              value: {{ .Values.nodeManager.service.port | quote }}
+            - name: DATABASE_URL
+              value: {{ include "ai-platform.dbUrl" . }}
+            - name: NATS_URL
+              value: {{ .Values.global.natsUrl | quote }}
+          resources:
+            {{- toYaml .Values.nodeManager.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-platform.component.fullname" (dict "root" . "component" "node-manager") }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node-manager
+spec:
+  type: {{ .Values.nodeManager.service.type }}
+  selector:
+    {{- include "ai-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: node-manager
+  ports:
+    - port: {{ .Values.nodeManager.service.port }}
+      targetPort: {{ .Values.nodeManager.service.port }}
+      name: http
+{{- end }}

@@ -7,6 +7,7 @@ from sqlalchemy import select
 from models import AlertRule, Alert, Agent
 from services.nats_service import nats_service
 import structlog
+from cachetools import TTLCache
 
 logger = structlog.get_logger()
 
@@ -19,7 +20,7 @@ CONDITION_FNS = {
 }
 
 # In-memory cooldown: rule_id+agent_id → last_fired_ts
-_cooldown: dict[str, float] = {}
+_cooldown: TTLCache = TTLCache(maxsize=10000, ttl=300)
 COOLDOWN_SECONDS = 300  # 5 min per rule per agent
 
 

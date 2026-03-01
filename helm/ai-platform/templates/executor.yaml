@@ -1,0 +1,66 @@
+{{- if .Values.executor.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-platform.component.fullname" (dict "root" . "component" "executor") }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: executor
+spec:
+  replicas: {{ .Values.executor.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ai-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: executor
+  template:
+    metadata:
+      labels:
+        {{- include "ai-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: executor
+    spec:
+      containers:
+        - name: executor
+          image: {{ include "ai-platform.image" (dict "root" . "image" .Values.executor.image) }}
+          imagePullPolicy: {{ .Values.executor.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.executor.service.port }}
+          env:
+            - name: PORT
+              value: {{ .Values.executor.service.port | quote }}
+            - name: NATS_URL
+              value: {{ .Values.global.natsUrl | quote }}
+            - name: CONTROL_PLANE_URL
+              value: {{ .Values.global.controlPlaneUrl | quote }}
+            - name: AGENT_NETWORK
+              value: {{ .Values.executor.env.agentNetwork | quote }}
+          resources:
+            {{- toYaml .Values.executor.resources | nindent 12 }}
+          {{- if .Values.executor.dockerSocket.enabled }}
+          volumeMounts:
+            - name: docker-socket
+              mountPath: {{ .Values.executor.dockerSocket.path }}
+          {{- end }}
+      {{- if .Values.executor.dockerSocket.enabled }}
+      volumes:
+        - name: docker-socket
+          hostPath:
+            path: {{ .Values.executor.dockerSocket.path }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-platform.component.fullname" (dict "root" . "component" "executor") }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: executor
+spec:
+  type: {{ .Values.executor.service.type }}
+  selector:
+    {{- include "ai-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: executor
+  ports:
+    - port: {{ .Values.executor.service.port }}
+      targetPort: {{ .Values.executor.service.port }}
+      name: http
+{{- end }}

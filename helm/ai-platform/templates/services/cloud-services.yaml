@@ -1,0 +1,620 @@
+{{/*
+  Cloud Platform Extension Services (v3.0)
+  All new services added in the 0008 migration:
+    agent-observability       (8109)
+    agent-sandbox-manager     (8096)
+    secrets-manager           (8104)
+    marketplace-validator     (8105)
+    billing-engine            (8101)
+    subscription-manager      (8102)
+    usage-meter               (8100)
+    agent-simulation-engine   (8097)
+    agent-evolution-engine    (8106)
+    global-scheduler          (8098)
+    region-controller         (8099)
+    cluster-controller        (8108)
+    agent-federation-network  (8107)
+    memory-vector-engine      (8103)
+*/}}
+
+{{/*──────────────────────────────────────────────────────────────────────────
+  Agent Observability
+──────────────────────────────────────────────────────────────────────────*/}}
+{{- if .Values.agentObservability.enabled }}
+{{- include "ai-platform.newServiceDeployment" (dict
+    "root" .
+    "svc"  "agent-observability"
+    "cfg"  .Values.agentObservability
+    "port" 8109
+) }}
+{{- end }}
+
+{{/*──────────────────────────────────────────────────────────────────────────
+  Agent Sandbox Manager
+──────────────────────────────────────────────────────────────────────────*/}}
+{{- if .Values.agentSandboxManager.enabled }}
+{{- $fullName := include "ai-platform.fullname" . -}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullName }}-agent-sandbox-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-manager
+spec:
+  replicas: {{ .Values.agentSandboxManager.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ai-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: agent-sandbox-manager
+  template:
+    metadata:
+      labels:
+        {{- include "ai-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: agent-sandbox-manager
+    spec:
+      serviceAccountName: default
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+      containers:
+        - name: agent-sandbox-manager
+          image: "{{ .Values.agentSandboxManager.image.repository }}:{{ .Values.agentSandboxManager.image.tag }}"
+          imagePullPolicy: {{ .Values.agentSandboxManager.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8096
+          envFrom:
+            - configMapRef:
+                name: {{ $fullName }}-config
+          env:
+            - name: PORT
+              value: "8096"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-platform.secretName" . }}
+                  key: PG_DSN
+            - name: GVISOR_ENABLED
+              value: {{ .Values.agentSandboxManager.env.GVISOR_ENABLED | default "false" | quote }}
+            - name: FIRECRACKER_ENABLED
+              value: {{ .Values.agentSandboxManager.env.FIRECRACKER_ENABLED | default "false" | quote }}
+            - name: DEFAULT_RUNTIME
+              value: {{ .Values.agentSandboxManager.env.DEFAULT_RUNTIME | default "docker" | quote }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.agentSandboxManager.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullName }}-agent-sandbox-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8096
+      targetPort: http
+      name: http
+  selector:
+    {{- include "ai-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-sandbox-manager
+{{- end }}
+
+{{/*──────────────────────────────────────────────────────────────────────────
+  Secrets Manager
+──────────────────────────────────────────────────────────────────────────*/}}
+{{- if .Values.secretsManager.enabled }}
+{{- $fullName := include "ai-platform.fullname" . -}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullName }}-secrets-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: secrets-manager
+spec:
+  replicas: {{ .Values.secretsManager.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ai-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: secrets-manager
+  template:
+    metadata:
+      labels:
+        {{- include "ai-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: secrets-manager
+      annotations:
+        secret-hash: {{ .Values.secretsManager.secretRef | sha256sum }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: secrets-manager
+          image: "{{ .Values.secretsManager.image.repository }}:{{ .Values.secretsManager.image.tag }}"
+          imagePullPolicy: {{ .Values.secretsManager.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8104
+          env:
+            - name: PORT
+              value: "8104"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-platform.secretName" . }}
+                  key: PG_DSN
+            - name: NATS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-platform.secretName" . }}
+                  key: NATS_URL
+            - name: MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretsManager.secretRef | default "platform-secrets" }}
+                  key: SECRETS_MASTER_KEY
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.secretsManager.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullName }}-secrets-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8104
+      targetPort: http
+      name: http
+  selector:
+    {{- include "ai-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: secrets-manager
+{{- end }}
+
+{{/*──────────────────────────────────────────────────────────────────────────
+  Marketplace Validator
+──────────────────────────────────────────────────────────────────────────*/}}
+{{- if .Values.marketplaceValidator.enabled }}
+{{- include "ai-platform.newServiceDeployment" (dict
+    "root" .
+    "svc"  "marketplace-validator"
+    "cfg"  .Values.marketplaceValidator
+    "port" 8105
+) }}
+{{- end }}
+
+{{/*──────────────────────────────────────────────────────────────────────────
+  Billing Engine
+──────────────────────────────────────────────────────────────────────────*/}}
+{{- if .Values.billingEngine.enabled }}
+{{- $fullName := include "ai-platform.fullname" . -}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullName }}-billing-engine
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: billing-engine
+spec:
+  replicas: {{ .Values.billingEngine.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ai-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: billing-engine
+  template:
+    metadata:
+      labels:
+        {{- include "ai-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: billing-engine
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: billing-engine
+          image: "{{ .Values.billingEngine.image.repository }}:{{ .Values.billingEngine.image.tag }}"
+          imagePullPolicy: {{ .Values.billingEngine.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8101
+          env:
+            - name: PORT
+              value: "8101"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-platform.secretName" . }}
+                  key: PG_DSN
+            - name: NATS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-platform.secretName" . }}
+                  key: NATS_URL
+            - name: STRIPE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.billingEngine.secretRef | default "platform-billing-secrets" }}
+                  key: STRIPE_SECRET_KEY
+                  optional: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.billingEngine.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullName }}-billing-engine
+  namespace: {{ .Release.Namespace }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8101
+      targetPort: http
+      name: http
+  selector:
+    {{- include "ai-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: billing-engine
+{{- end }}
+
+{{/*──────────────────────────────────────────────────────────────────────────
+  Subscription Manager
+──────────────────────────────────────────────────────────────────────────*/}}
+{{- if .Values.subscriptionManager.enabled }}
+{{- include "ai-platform.newServiceDeployment" (dict
+    "root" .
+    "svc"  "subscription-manager"
+    "cfg"  .Values.subscriptionManager
+    "port" 8102
+) }}
+{{- end }}
+
+{{/*──────────────────────────────────────────────────────────────────────────
+  Usage Meter
+──────────────────────────────────────────────────────────────────────────*/}}
+{{- if .Values.usageMeter.enabled }}
+{{- include "ai-platform.newServiceDeployment" (dict
+    "root" .
+    "svc"  "usage-meter"
+    "cfg"  .Values.usageMeter
+    "port" 8100
+) }}
+{{- end }}
+
+{{/*──────────────────────────────────────────────────────────────────────────
+  Agent Simulation Engine
+──────────────────────────────────────────────────────────────────────────*/}}
+{{- if .Values.agentSimulationEngine.enabled }}
+{{- include "ai-platform.newServiceDeployment" (dict
+    "root" .
+    "svc"  "agent-simulation-engine"
+    "cfg"  .Values.agentSimulationEngine
+    "port" 8097
+) }}
+{{- end }}
+
+{{/*──────────────────────────────────────────────────────────────────────────
+  Agent Evolution Engine
+──────────────────────────────────────────────────────────────────────────*/}}
+{{- if .Values.agentEvolutionEngine.enabled }}
+{{- include "ai-platform.newServiceDeployment" (dict
+    "root" .
+    "svc"  "agent-evolution-engine"
+    "cfg"  .Values.agentEvolutionEngine
+    "port" 8106
+) }}
+{{- end }}
+
+{{/*──────────────────────────────────────────────────────────────────────────
+  Global Scheduler
+──────────────────────────────────────────────────────────────────────────*/}}
+{{- if .Values.globalScheduler.enabled }}
+{{- $fullName := include "ai-platform.fullname" . -}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullName }}-global-scheduler
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: global-scheduler
+spec:
+  replicas: {{ .Values.globalScheduler.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ai-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: global-scheduler
+  template:
+    metadata:
+      labels:
+        {{- include "ai-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: global-scheduler
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: global-scheduler
+          image: "{{ .Values.globalScheduler.image.repository }}:{{ .Values.globalScheduler.image.tag }}"
+          imagePullPolicy: {{ .Values.globalScheduler.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8098
+          envFrom:
+            - configMapRef:
+                name: {{ $fullName }}-config
+          env:
+            - name: PORT
+              value: "8098"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-platform.secretName" . }}
+                  key: PG_DSN
+            - name: NATS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-platform.secretName" . }}
+                  key: NATS_URL
+            {{- range $k, $v := .Values.globalScheduler.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.globalScheduler.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullName }}-global-scheduler
+  namespace: {{ .Release.Namespace }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8098
+      targetPort: http
+      name: http
+  selector:
+    {{- include "ai-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: global-scheduler
+{{- end }}
+
+{{/*──────────────────────────────────────────────────────────────────────────
+  Region Controller
+──────────────────────────────────────────────────────────────────────────*/}}
+{{- if .Values.regionController.enabled }}
+{{- include "ai-platform.newServiceDeployment" (dict
+    "root" .
+    "svc"  "region-controller"
+    "cfg"  .Values.regionController
+    "port" 8099
+) }}
+{{- end }}
+
+{{/*──────────────────────────────────────────────────────────────────────────
+  Cluster Controller
+──────────────────────────────────────────────────────────────────────────*/}}
+{{- if .Values.clusterController.enabled }}
+{{- include "ai-platform.newServiceDeployment" (dict
+    "root" .
+    "svc"  "cluster-controller"
+    "cfg"  .Values.clusterController
+    "port" 8108
+) }}
+{{- end }}
+
+{{/*──────────────────────────────────────────────────────────────────────────
+  Agent Federation Network
+──────────────────────────────────────────────────────────────────────────*/}}
+{{- if .Values.agentFederationNetwork.enabled }}
+{{- include "ai-platform.newServiceDeployment" (dict
+    "root" .
+    "svc"  "agent-federation-network"
+    "cfg"  .Values.agentFederationNetwork
+    "port" 8107
+) }}
+{{- end }}
+
+{{/*──────────────────────────────────────────────────────────────────────────
+  Memory Vector Engine
+──────────────────────────────────────────────────────────────────────────*/}}
+{{- if .Values.memoryVectorEngine.enabled }}
+{{- $fullName := include "ai-platform.fullname" . -}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullName }}-memory-vector-engine
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: memory-vector-engine
+spec:
+  replicas: {{ .Values.memoryVectorEngine.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ai-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: memory-vector-engine
+  template:
+    metadata:
+      labels:
+        {{- include "ai-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: memory-vector-engine
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: memory-vector-engine
+          image: "{{ .Values.memoryVectorEngine.image.repository }}:{{ .Values.memoryVectorEngine.image.tag }}"
+          imagePullPolicy: {{ .Values.memoryVectorEngine.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8103
+          env:
+            - name: PORT
+              value: "8103"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-platform.secretName" . }}
+                  key: PG_DSN
+            - name: NATS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-platform.secretName" . }}
+                  key: NATS_URL
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.memoryVectorEngine.secretRef | default "platform-openai-secrets" }}
+                  key: OPENAI_API_KEY
+                  optional: true
+            - name: EMBEDDING_DIM
+              value: {{ .Values.memoryVectorEngine.env.EMBEDDING_DIM | default "1536" | quote }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.memoryVectorEngine.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullName }}-memory-vector-engine
+  namespace: {{ .Release.Namespace }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8103
+      targetPort: http
+      name: http
+  selector:
+    {{- include "ai-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: memory-vector-engine
+{{- end }}

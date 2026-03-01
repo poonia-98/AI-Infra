@@ -1,0 +1,65 @@
+{{- if .Values.executionQueue.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-platform.component.fullname" (dict "root" . "component" "execution-queue") }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: execution-queue
+spec:
+  replicas: {{ .Values.executionQueue.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ai-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: execution-queue
+  template:
+    metadata:
+      labels:
+        {{- include "ai-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: execution-queue
+    spec:
+      containers:
+        - name: execution-queue
+          image: {{ include "ai-platform.image" (dict "root" . "image" .Values.executionQueue.image) }}
+          imagePullPolicy: {{ .Values.executionQueue.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.executionQueue.service.port }}
+          env:
+            - name: PORT
+              value: {{ .Values.executionQueue.service.port | quote }}
+            - name: DATABASE_URL
+              value: {{ include "ai-platform.dbUrl" . }}
+            - name: REDIS_URL
+              value: {{ include "ai-platform.redisUrl" . }}
+            - name: NATS_URL
+              value: {{ .Values.global.natsUrl | quote }}
+            - name: LEASE_SECONDS
+              value: {{ .Values.executionQueue.env.leaseSeconds | quote }}
+            - name: VISIBILITY_TIMEOUT_SECONDS
+              value: {{ .Values.executionQueue.env.visibilityTimeoutSeconds | quote }}
+            - name: CLAIM_BATCH
+              value: {{ .Values.executionQueue.env.claimBatch | quote }}
+            - name: MAX_INFLIGHT
+              value: {{ .Values.executionQueue.env.maxInflight | quote }}
+            - name: REQUEUE_INTERVAL
+              value: {{ .Values.executionQueue.env.requeueInterval | quote }}
+          resources:
+            {{- toYaml .Values.executionQueue.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-platform.component.fullname" (dict "root" . "component" "execution-queue") }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: execution-queue
+spec:
+  type: {{ .Values.executionQueue.service.type }}
+  selector:
+    {{- include "ai-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: execution-queue
+  ports:
+    - port: {{ .Values.executionQueue.service.port }}
+      targetPort: {{ .Values.executionQueue.service.port }}
+      name: http
+{{- end }}

@@ -1,0 +1,53 @@
+{{- if .Values.marketplace.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-platform.component.fullname" (dict "root" . "component" "marketplace-service") }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: marketplace-service
+spec:
+  replicas: {{ .Values.marketplace.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ai-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: marketplace-service
+  template:
+    metadata:
+      labels:
+        {{- include "ai-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: marketplace-service
+    spec:
+      containers:
+        - name: marketplace-service
+          image: {{ include "ai-platform.image" (dict "root" . "image" .Values.marketplace.image) }}
+          imagePullPolicy: {{ .Values.marketplace.image.pullPolicy }}
+          ports:
+            - containerPort: 8095
+          env:
+            - name: PORT
+              value: "8095"
+            - name: DATABASE_URL
+              value: {{ include "ai-platform.dbUrl" . }}
+            - name: NATS_URL
+              value: {{ .Values.global.natsUrl | quote }}
+          resources:
+            {{- toYaml .Values.marketplace.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-platform.component.fullname" (dict "root" . "component" "marketplace-service") }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: marketplace-service
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "ai-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: marketplace-service
+  ports:
+    - port: 8095
+      targetPort: 8095
+      name: http
+{{- end }}

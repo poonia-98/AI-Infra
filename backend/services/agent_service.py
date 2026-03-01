@@ -16,9 +16,10 @@ logger = structlog.get_logger()
 
 
 class AgentService:
-    async def create_agent(self, db: AsyncSession, data: AgentCreate) -> Agent:
+    async def create_agent(self, db: AsyncSession, data: AgentCreate, organisation_id: str) -> Agent:
         agent = Agent(
             id=uuid.uuid4(),
+            organisation_id=uuid.UUID(organisation_id),
             name=data.name,
             description=data.description,
             agent_type=data.agent_type,
@@ -45,18 +46,37 @@ class AgentService:
         })
         return agent
 
-    async def get_agent(self, db: AsyncSession, agent_id: uuid.UUID) -> Optional[Agent]:
-        result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    async def get_agent(self, db: AsyncSession, agent_id: uuid.UUID, organisation_id: Optional[str] = None) -> Optional[Agent]:
+        query = select(Agent).where(Agent.id == agent_id)
+        if organisation_id:
+            query = query.where(Agent.organisation_id == uuid.UUID(organisation_id))
+        result = await db.execute(query)
         return result.scalar_one_or_none()
 
-    async def list_agents(self, db: AsyncSession, skip: int = 0, limit: int = 100) -> list[Agent]:
+    async def list_agents(
+        self,
+        db: AsyncSession,
+        organisation_id: str,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> list[Agent]:
         result = await db.execute(
-            select(Agent).offset(skip).limit(limit).order_by(Agent.created_at.desc())
+            select(Agent)
+            .where(Agent.organisation_id == uuid.UUID(organisation_id))
+            .offset(skip)
+            .limit(limit)
+            .order_by(Agent.created_at.desc())
         )
         return list(result.scalars().all())
 
-    async def update_agent(self, db: AsyncSession, agent_id: uuid.UUID, data: AgentUpdate) -> Optional[Agent]:
-        agent = await self.get_agent(db, agent_id)
+    async def update_agent(
+        self,
+        db: AsyncSession,
+        agent_id: uuid.UUID,
+        data: AgentUpdate,
+        organisation_id: str,
+    ) -> Optional[Agent]:
+        agent = await self.get_agent(db, agent_id, organisation_id=organisation_id)
         if not agent:
             return None
         update_data = data.model_dump(exclude_unset=True)
@@ -67,12 +87,12 @@ class AgentService:
         await db.refresh(agent)
         return agent
 
-    async def delete_agent(self, db: AsyncSession, agent_id: uuid.UUID) -> bool:
-        agent = await self.get_agent(db, agent_id)
+    async def delete_agent(self, db: AsyncSession, agent_id: uuid.UUID, organisation_id: str) -> bool:
+        agent = await self.get_agent(db, agent_id, organisation_id=organisation_id)
         if not agent:
             return False
         if agent.status == "running":
-            await self.stop_agent(db, agent_id)
+            await self.stop_agent(db, agent_id, organisation_id=organisation_id)
         # Use explicit SQL deletes to avoid async lazy-load cascade failure
         from models import AlertRule, Alert
         await db.execute(delete(Alert).where(Alert.agent_id == agent_id))
@@ -90,8 +110,8 @@ class AgentService:
         })
         return True
 
-    async def start_agent(self, db: AsyncSession, agent_id: uuid.UUID) -> dict[str, Any]:
-        agent = await self.get_agent(db, agent_id)
+    async def start_agent(self, db: AsyncSession, agent_id: uuid.UUID, organisation_id: Optional[str]) -> dict[str, Any]:
+        agent = await self.get_agent(db, agent_id, organisation_id=organisation_id)
         if not agent:
             return {"success": False, "error": "Agent not found"}
 
@@ -99,6 +119,7 @@ class AgentService:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
                     f"{settings.EXECUTOR_URL}/containers/start",
+                    headers={"X-Service-API-Key": settings.CONTROL_PLANE_API_KEY},
                     json={
                         "agent_id": str(agent_id),
                         "image": agent.image,
@@ -159,8 +180,8 @@ class AgentService:
             logger.error("Failed to start agent", agent_id=str(agent_id), error=str(e))
             return {"success": False, "error": str(e)}
 
-    async def stop_agent(self, db: AsyncSession, agent_id: uuid.UUID) -> dict[str, Any]:
-        agent = await self.get_agent(db, agent_id)
+    async def stop_agent(self, db: AsyncSession, agent_id: uuid.UUID, organisation_id: Optional[str]) -> dict[str, Any]:
+        agent = await self.get_agent(db, agent_id, organisation_id=organisation_id)
         if not agent:
             return {"success": False, "error": "Agent not found"}
 
@@ -168,6 +189,7 @@ class AgentService:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
                     f"{settings.EXECUTOR_URL}/containers/stop",
+                    headers={"X-Service-API-Key": settings.CONTROL_PLANE_API_KEY},
                     json={"agent_id": str(agent_id), "container_id": agent.container_id}
                 )
                 result = response.json()
@@ -200,19 +222,26 @@ class AgentService:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    async def restart_agent(self, db: AsyncSession, agent_id: uuid.UUID) -> dict[str, Any]:
-        stop_result = await self.stop_agent(db, agent_id)
+    async def restart_agent(self, db: AsyncSession, agent_id: uuid.UUID, organisation_id: Optional[str]) -> dict[str, Any]:
+        stop_result = await self.stop_agent(db, agent_id, organisation_id=organisation_id)
         if not stop_result.get("success") and "not found" not in stop_result.get("error", "").lower():
             return stop_result
-        return await self.start_agent(db, agent_id)
+        return await self.start_agent(db, agent_id, organisation_id=organisation_id)
 
     async def handle_agent_failure(self, db: AsyncSession, agent_id_str: str):
         """Called when agent.failed event arrives; auto-restart if configured."""
+        lock_key = f"agent:restart:{agent_id_str}"
+        lock_acquired = False
         try:
             agent_id = uuid.UUID(agent_id_str)
             agent = await self.get_agent(db, agent_id)
             if not agent:
                 return
+            if redis_service.client:
+                acquired = await redis_service.client.set(lock_key, "1", ex=30, nx=True)
+                if not acquired:
+                    return
+                lock_acquired = True
             stmt = update(Agent).where(Agent.id == agent_id).values(
                 status="error",
                 last_error=f"Agent failed at {datetime.now(timezone.utc).isoformat()}",
@@ -230,12 +259,19 @@ class AgentService:
                         restart_count=Agent.restart_count + 1
                     )
                     await restart_db.execute(stmt2)
-                    result = await self.start_agent(restart_db, agent_id)
+                    result = await self.start_agent(
+                        restart_db,
+                        agent_id,
+                        organisation_id=str(agent.organisation_id) if agent.organisation_id else "",
+                    )
                     await restart_db.commit()
                     if result.get("success"):
                         logger.info("Auto-restarted agent", agent_id=agent_id_str)
         except Exception as e:
             logger.error("Auto-restart failed", agent_id=agent_id_str, error=str(e))
+        finally:
+            if redis_service.client and lock_acquired:
+                await redis_service.client.delete(lock_key)
 
     async def _update_agent_status(self, db: AsyncSession, agent_id: uuid.UUID, status: str):
         from sqlalchemy import update as sa_update

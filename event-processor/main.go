@@ -17,6 +17,7 @@ import (
 var (
 	processed atomic.Int64
 	errCount  atomic.Int64
+	serviceAPIKey string
 )
 
 func env(k, def string) string {
@@ -40,6 +41,9 @@ func post(ctx context.Context, url string, body []byte) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if serviceAPIKey != "" {
+		req.Header.Set("X-Service-API-Key", serviceAPIKey)
+	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		errCount.Add(1)
@@ -140,6 +144,7 @@ func main() {
 	natsURL := env("NATS_URL", "nats://nats:4222")
 	controlURL := env("CONTROL_PLANE_URL", "http://backend:8000")
 	wsURL := env("WS_GATEWAY_URL", "http://ws-gateway:8084")
+	serviceAPIKey = env("CONTROL_PLANE_API_KEY", "")
 
 	var nc *natsgo.Conn
 	var err error

@@ -1,0 +1,59 @@
+{{- if .Values.logProcessor.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-platform.component.fullname" (dict "root" . "component" "log-processor") }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: log-processor
+spec:
+  replicas: {{ .Values.logProcessor.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ai-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: log-processor
+  template:
+    metadata:
+      labels:
+        {{- include "ai-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: log-processor
+    spec:
+      containers:
+        - name: log-processor
+          image: {{ include "ai-platform.image" (dict "root" . "image" .Values.logProcessor.image) }}
+          imagePullPolicy: {{ .Values.logProcessor.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.logProcessor.service.port }}
+          env:
+            - name: PORT
+              value: {{ .Values.logProcessor.service.port | quote }}
+            - name: DATABASE_URL
+              value: {{ include "ai-platform.dbUrl" . }}
+            - name: NATS_URL
+              value: {{ .Values.global.natsUrl | quote }}
+            - name: BATCH_SIZE
+              value: {{ .Values.logProcessor.env.batchSize | quote }}
+            - name: FLUSH_INTERVAL
+              value: {{ .Values.logProcessor.env.flushInterval | quote }}
+            - name: WORKER_COUNT
+              value: {{ .Values.logProcessor.env.workerCount | quote }}
+          resources:
+            {{- toYaml .Values.logProcessor.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-platform.component.fullname" (dict "root" . "component" "log-processor") }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: log-processor
+spec:
+  type: {{ .Values.logProcessor.service.type }}
+  selector:
+    {{- include "ai-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: log-processor
+  ports:
+    - port: {{ .Values.logProcessor.service.port }}
+      targetPort: {{ .Values.logProcessor.service.port }}
+      name: http
+{{- end }}

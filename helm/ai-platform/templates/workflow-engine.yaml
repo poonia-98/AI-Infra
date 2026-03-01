@@ -1,0 +1,55 @@
+{{- if .Values.workflowEngine.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-platform.component.fullname" (dict "root" . "component" "workflow-engine") }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: workflow-engine
+spec:
+  replicas: {{ .Values.workflowEngine.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ai-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: workflow-engine
+  template:
+    metadata:
+      labels:
+        {{- include "ai-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: workflow-engine
+    spec:
+      containers:
+        - name: workflow-engine
+          image: {{ include "ai-platform.image" (dict "root" . "image" .Values.workflowEngine.image) }}
+          imagePullPolicy: {{ .Values.workflowEngine.image.pullPolicy }}
+          ports:
+            - containerPort: 8092
+          env:
+            - name: PORT
+              value: "8092"
+            - name: DATABASE_URL
+              value: {{ include "ai-platform.dbUrl" . }}
+            - name: NATS_URL
+              value: {{ .Values.global.natsUrl | quote }}
+            - name: CONTROL_PLANE_URL
+              value: {{ .Values.global.controlPlaneUrl | quote }}
+          resources:
+            {{- toYaml .Values.workflowEngine.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-platform.component.fullname" (dict "root" . "component" "workflow-engine") }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: workflow-engine
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "ai-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: workflow-engine
+  ports:
+    - port: 8092
+      targetPort: 8092
+      name: http
+{{- end }}

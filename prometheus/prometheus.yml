@@ -42,3 +42,61 @@ scrape_configs:
     static_configs:
       - targets: ['otel-collector:8888']
     metrics_path: '/metrics'
+
+  # ── Cloud Platform Extension Services ─────────────────────────────────
+
+  - job_name: 'agent-observability'
+    static_configs:
+      - targets: ['agent-observability:8109']
+
+  - job_name: 'agent-sandbox-manager'
+    static_configs:
+      - targets: ['agent-sandbox-manager:8096']
+
+  - job_name: 'secrets-manager'
+    static_configs:
+      - targets: ['secrets-manager:8104']
+
+  - job_name: 'marketplace-validator'
+    static_configs:
+      - targets: ['marketplace-validator:8105']
+
+  - job_name: 'billing-engine'
+    static_configs:
+      - targets: ['billing-engine:8101']
+
+  - job_name: 'subscription-manager'
+    static_configs:
+      - targets: ['subscription-manager:8102']
+
+  - job_name: 'usage-meter'
+    static_configs:
+      - targets: ['usage-meter:8100']
+
+  - job_name: 'agent-simulation-engine'
+    static_configs:
+      - targets: ['agent-simulation-engine:8097']
+
+  - job_name: 'agent-evolution-engine'
+    static_configs:
+      - targets: ['agent-evolution-engine:8106']
+
+  - job_name: 'global-scheduler'
+    static_configs:
+      - targets: ['global-scheduler:8098']
+
+  - job_name: 'region-controller'
+    static_configs:
+      - targets: ['region-controller:8099']
+
+  - job_name: 'cluster-controller'
+    static_configs:
+      - targets: ['cluster-controller:8108']
+
+  - job_name: 'agent-federation-network'
+    static_configs:
+      - targets: ['agent-federation-network:8107']
+
+  - job_name: 'memory-vector-engine'
+    static_configs:
+      - targets: ['memory-vector-engine:8103']

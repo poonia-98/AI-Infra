@@ -10,18 +10,25 @@ volumes:
   redis_data:
   prometheus_data:
   grafana_data:
+  nats_data:
 
 x-common-env: &common-env
+  DATABASE_URL: postgres://postgres:postgres@postgres:5432/agentdb?sslmode=disable
   NATS_URL: nats://nats:4222
+  REDIS_URL: redis://redis:6379
   CONTROL_PLANE_URL: http://backend:8000
-  WS_GATEWAY_URL: http://ws-gateway:8084
+
+x-svc-deps: &svc-deps
+  depends_on:
+    postgres:
+      condition: service_healthy
+    nats:
+      condition: service_healthy
 
 services:
 
-  # ── Infrastructure ──────────────────────────────────────────────────────────
-
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
@@ -29,21 +36,22 @@ services:
       POSTGRES_DB: agentdb
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./migrations/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./migrations:/docker-entrypoint-initdb.d:ro
     ports:
       - "5432:5432"
     networks:
       - platform_network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL","pg_isready -U postgres -d agentdb"]
       interval: 5s
       timeout: 5s
       retries: 10
+    command: postgres -c max_connections=300 -c shared_buffers=512MB -c work_mem=16MB
 
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --appendonly yes
     volumes:
       - redis_data:/data
     ports:
@@ -51,7 +59,7 @@ services:
     networks:
       - platform_network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD","redis-cli","ping"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -59,162 +67,19 @@ services:
   nats:
     image: nats:2.10-alpine
     restart: unless-stopped
-    command: -js -m 8222
+    command: -js -m 8222 -sd /data
+    volumes:
+      - nats_data:/data
     ports:
       - "4222:4222"
       - "8222:8222"
     networks:
       - platform_network
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://localhost:8222/healthz || exit 1"]
+      test: ["CMD-SHELL","wget -q -O- http://localhost:8222/healthz || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 10
-
-  # ── Platform services ───────────────────────────────────────────────────────
-
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    environment:
-      <<: *common-env
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/agentdb
-      REDIS_URL: redis://redis:6379
-      SECRET_KEY: change-me-in-production-please
-      AGENT_NETWORK: platform_network
-      # Tells agent_service where to reach the executor
-      EXECUTOR_URL: http://executor:8081
-    ports:
-      - "8000:8000"
-    networks:
-      - platform_network
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      nats:
-        condition: service_healthy
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  executor:
-    build:
-      context: ./executor
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    environment:
-      <<: *common-env
-      PORT: "8081"
-      AGENT_NETWORK: platform_network
-      DOCKER_API_VERSION: "1.44"
-    ports:
-      - "8081:8081"
-    networks:
-      - platform_network
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      nats:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  event-processor:
-    build:
-      context: ./event-processor
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    environment:
-      <<: *common-env
-      PORT: "8082"
-    ports:
-      - "8082:8082"
-    networks:
-      - platform_network
-    depends_on:
-      nats:
-        condition: service_healthy
-      backend:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  metrics-collector:
-    build:
-      context: ./metrics-collector
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    environment:
-      <<: *common-env
-      PORT: "8083"
-    ports:
-      - "8083:8083"
-    networks:
-      - platform_network
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      nats:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8083/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  ws-gateway:
-    build:
-      context: ./websocket-gateway
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    environment:
-      NATS_URL: nats://nats:4222
-      PORT: "8084"
-    ports:
-      - "8084:8084"
-    networks:
-      - platform_network
-    depends_on:
-      nats:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8084/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    environment:
-      # Browser-side: must be the host-accessible URL, not the container name
-      NEXT_PUBLIC_API_URL: http://localhost:8000
-      NEXT_PUBLIC_WS_URL: ws://localhost:8084
-    ports:
-      - "3000:3000"
-    networks:
-      - platform_network
-    depends_on:
-      backend:
-        condition: service_healthy
-
-  # ── Observability ───────────────────────────────────────────────────────────
 
   prometheus:
     image: prom/prometheus:v2.51.2
@@ -222,10 +87,11 @@ services:
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
-      - '--web.enable-lifecycle'
       - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
     ports:
       - "9090:9090"
@@ -236,14 +102,12 @@ services:
     image: grafana/grafana:10.4.2
     restart: unless-stopped
     environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
       GF_USERS_ALLOW_SIGN_UP: "false"
-      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/system-dashboard.json
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./grafana/dashboards:/etc/grafana/dashboards:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       - "3001:3000"
     networks:
@@ -261,8 +125,482 @@ services:
       - "4317:4317"
       - "4318:4318"
       - "8888:8888"
-      - "13133:13133"
+    networks:
+      - platform_network
+
+  # ── Core Platform ──────────────────────────────────────────────────────
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      SECRET_KEY: ${SECRET_KEY:-change-me-32chars-minimum-please}
+      SECRETS_PASSPHRASE: ${SECRETS_PASSPHRASE:-change-me-secrets}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      BILLING_ENGINE_URL: http://billing-engine:8101
+      SUBSCRIPTION_MGR_URL: http://subscription-manager:8102
+      USAGE_METER_URL: http://usage-meter:8100
+      SANDBOX_URL: http://agent-sandbox-manager:8096
+      SIM_URL: http://agent-simulation-engine:8097
+      GLOBAL_SCHED_URL: http://global-scheduler:8098
+      VECTOR_URL: http://memory-vector-engine:8103
+      SECRETS_MANAGER_URL: http://secrets-manager:8104
+      MARKETPLACE_VALIDATOR_URL: http://marketplace-validator:8105
+      AGENT_EVOLUTION_URL: http://agent-evolution-engine:8106
+      AGENT_FEDERATION_URL: http://agent-federation-network:8107
+      CLUSTER_CTRL_URL: http://cluster-controller:8108
+      CONTROL_BRAIN_URL: http://control-brain:8200
+      WORKFLOW_ENGINE_URL: http://workflow-engine:8092
+      AGENT_AUTOSCALER_URL: http://agent-autoscaler:8093
+      AGENT_GATEWAY_URL: http://agent-gateway:8094
+      OBS_URL: http://agent-observability:8109
+    ports:
+      - "8000:8000"
     networks:
       - platform_network
     depends_on:
-      - prometheus
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD","curl","-f","http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_WS_URL: ws://localhost:8084
+    ports:
+      - "3000:3000"
+    networks:
+      - platform_network
+    depends_on:
+      - backend
+
+  # ── Runtime ────────────────────────────────────────────────────────────
+
+  executor:
+    build:
+      context: ./executor
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8081"
+    ports:
+      - "8081:8081"
+    networks:
+      - platform_network
+    <<: *svc-deps
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  reconciliation-service:
+    build:
+      context: ./reconciliation-service
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8085"
+    ports:
+      - "8085:8085"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+  scheduler-service:
+    build:
+      context: ./scheduler-service
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8086"
+    ports:
+      - "8086:8086"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+  node-manager:
+    build:
+      context: ./node-manager
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8087"
+    ports:
+      - "8087:8087"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+  log-processor:
+    build:
+      context: ./log-processor
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8088"
+    ports:
+      - "8088:8088"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+  event-processor:
+    build:
+      context: ./event-processor
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8082"
+    ports:
+      - "8082:8082"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+  metrics-collector:
+    build:
+      context: ./metrics-collector
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8083"
+    ports:
+      - "8083:8083"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+  websocket-gateway:
+    build:
+      context: ./websocket-gateway
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8084"
+    ports:
+      - "8084:8084"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+  # ── Workflow & Orchestration ───────────────────────────────────────────
+
+  workflow-engine:
+    build:
+      context: ./workflow-engine
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8092"
+      WORKER_COUNT: "16"
+    ports:
+      - "8092:8092"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+  agent-autoscaler:
+    build:
+      context: ./agent-autoscaler
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8093"
+      METRICS_URL: http://metrics-collector:8083
+    ports:
+      - "8093:8093"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+  agent-gateway:
+    build:
+      context: ./agent-gateway
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8094"
+    ports:
+      - "8094:8094"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+  marketplace-service:
+    build:
+      context: ./marketplace-service
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8095"
+    ports:
+      - "8095:8095"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+  # ── Observability & Security ───────────────────────────────────────────
+
+  agent-observability:
+    build:
+      context: ./agent-observability
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8109"
+      SNAPSHOT_INTERVAL: 60s
+    ports:
+      - "8109:8109"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+  agent-sandbox-manager:
+    build:
+      context: ./agent-sandbox-manager
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8096"
+      GVISOR_ENABLED: "false"
+      FIRECRACKER_ENABLED: "false"
+      DEFAULT_RUNTIME: docker
+    ports:
+      - "8096:8096"
+    networks:
+      - platform_network
+    <<: *svc-deps
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  secrets-manager:
+    build:
+      context: ./secrets-manager
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8104"
+      MASTER_KEY: ${SECRETS_MASTER_KEY:-change-me-master-key-32bytes-min}
+    ports:
+      - "8104:8104"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+  marketplace-validator:
+    build:
+      context: ./marketplace-validator
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8105"
+      TRIVY_ENABLED: "true"
+    ports:
+      - "8105:8105"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+  # ── Billing ────────────────────────────────────────────────────────────
+
+  billing-engine:
+    build:
+      context: ./billing-engine
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8101"
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+    ports:
+      - "8101:8101"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+  subscription-manager:
+    build:
+      context: ./subscription-manager
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8102"
+      BILLING_ENGINE_URL: http://billing-engine:8101
+    ports:
+      - "8102:8102"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+  usage-meter:
+    build:
+      context: ./usage-meter
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8100"
+      FLUSH_INTERVAL: 30s
+    ports:
+      - "8100:8100"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+  # ── Simulation & Evolution ─────────────────────────────────────────────
+
+  agent-simulation-engine:
+    build:
+      context: ./agent-simulation-engine
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8097"
+      WORKERS: "8"
+    ports:
+      - "8097:8097"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+  agent-evolution-engine:
+    build:
+      context: ./agent-evolution-engine
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8106"
+    ports:
+      - "8106:8106"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+
+
+  global-scheduler:
+    build:
+      context: ./global-scheduler
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8098"
+      SCHEDULE_INTERVAL: 10s
+      HEARTBEAT_INTERVAL: 30s
+      FAILOVER_THRESHOLD: 2m
+    ports:
+      - "8098:8098"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+  region-controller:
+    build:
+      context: ./region-controller
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8099"
+      REGION_NAME: local
+      GLOBAL_SCHEDULER_URL: http://global-scheduler:8098
+    ports:
+      - "8099:8099"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+  cluster-controller:
+    build:
+      context: ./cluster-controller
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8108"
+    ports:
+      - "8108:8108"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+  agent-federation-network:
+    build:
+      context: ./agent-federation-network
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8107"
+      FEDERATION_SECRET: ${FEDERATION_SECRET:-change-me-federation-secret}
+    ports:
+      - "8107:8107"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+  # ── Vector Memory ──────────────────────────────────────────────────────
+
+  memory-vector-engine:
+    build:
+      context: ./memory-vector-engine
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8103"
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      EMBEDDING_DIM: "1536"
+    ports:
+      - "8103:8103"
+    networks:
+      - platform_network
+    <<: *svc-deps
+
+
+  # ── Control Brain ─────────────────────────────────────────────────────────
+  control-brain:
+    build:
+      context: ./control-brain
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      PORT: "8200"
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/agentdb?sslmode=disable
+      HEARTBEAT_INTERVAL: 15s
+      RECONCILE_INTERVAL: 10s
+      BRAIN_SECRET: ${BRAIN_SECRET:-change-me-brain-secret-32chars}
+      EXECUTOR_URL: http://executor:8081
+      METRICS_URL: http://metrics-collector:8083
+      AUTOSCALER_URL: http://agent-autoscaler:8093
+      SCHEDULER_URL: http://global-scheduler:8098
+    ports:
+      - "8200:8200"
+    networks:
+      - platform_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8200/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10

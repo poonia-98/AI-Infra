@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentcloud-sdk"
+version = "0.1.0"
+description = "Agent Cloud Platform SDK"
+requires-python = ">=3.10"
+dependencies = [
+  "httpx>=0.27.0",
+  "typer>=0.12.3",
+]
+
+[project.scripts]
+agentcloud = "agentcloud.cli:app"

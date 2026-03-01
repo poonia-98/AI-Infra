@@ -1,578 +1,437 @@
-# 🤖 AI Agent Infrastructure Platform
+# AgentPlane
 
-> A production-grade, containerised orchestration system for deploying, running, and monitoring autonomous AI agents — think Kubernetes, but purpose-built for agent workloads.
+AgentPlane is an infrastructure platform for deploying and running autonomous AI agents at scale. Think of it the way you think about Kubernetes — you don't manually manage where your containers run, how many replicas spin up, or what happens when a node dies. AgentPlane does the same thing, but for agents.
 
-[![CI Pipeline](https://github.com/poonia-98/AI-Infra/actions/workflows/ci.yml/badge.svg)](https://github.com/poonia-98/AI-Infra/actions/workflows/ci.yml)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Go 1.24](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go)](https://golang.org)
-[![Python 3.11](https://img.shields.io/badge/Python-3.11-3776AB?logo=python)](https://python.org)
-[![Next.js 14](https://img.shields.io/badge/Next.js-14-000000?logo=nextdotjs)](https://nextjs.org)
-[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker)](https://docker.com)
+You give it an agent. It handles the rest.
 
 ---
 
-## 📋 Table of Contents
+## What it actually does
 
-- [Overview](#-overview)
-- [Architecture](#-architecture)
-- [Key Features](#-key-features)
-- [Technology Stack](#-technology-stack)
-- [Prerequisites](#-prerequisites)
-- [Quick Start](#-quick-start)
-- [Project Structure](#-project-structure)
-- [API Reference](#-api-reference)
-- [Testing](#-testing)
-- [CI/CD](#-cicd)
-- [Observability](#-observability)
-- [Security](#-security)
-- [Roadmap](#-roadmap)
-- [Contributing](#-contributing)
-- [License](#-license)
+Most agent frameworks stop at the prompt. You write a system prompt, wire up some tools, and ship it. That works fine until you have 50 agents running in production, one of them starts misbehaving at 3am, you need to debug exactly what decision it made at step 14 of execution #847, and you're staring at logs wondering what happened.
+
+AgentPlane was built around the operational reality of running agents in production:
+
+- Agents need to be deployed somewhere, scaled when load increases, and restarted when they crash
+- Agents need memory that persists across sessions — not just a context window, but real retrieval
+- Agents talking to other agents across organizations need trust boundaries and billing
+- You need to be able to replay any execution and see every single step
+- Sometimes you want to mutate an agent's prompt, run it against a fitness function, and automatically promote the version that performs better
+
+The architecture reflects these needs directly. There isn't a "monitoring addon" bolted on — observability is wired into every service from the start.
 
 ---
 
-## 🌟 Overview
+## Stack
 
-The AI Agent Infrastructure Platform provides a complete control plane for autonomous AI agents. It handles the full lifecycle from deployment to teardown, streaming live telemetry to a real-time dashboard while keeping a full audit trail of every execution.
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Developer / Operator                        │
-│                        Browser UI                               │
-└───────────────────────────┬─────────────────────────────────────┘
-                            │ HTTP / WebSocket
-┌───────────────────────────▼─────────────────────────────────────┐
-│                      Next.js Frontend                           │
-│              Dashboard · Logs · Metrics · Events                │
-└──────────┬────────────────────────────────────┬─────────────────┘
-           │ REST                               │ WebSocket
-┌──────────▼──────────┐             ┌───────────▼─────────────────┐
-│   FastAPI Backend   │             │     WebSocket Gateway (Go)  │
-│  Agent Management   │             │   NATS → WebSocket Bridge   │
-│  Execution Tracking │             └───────────┬─────────────────┘
-│  Logs · Metrics     │                         │
-└──────────┬──────────┘             ┌───────────▼─────────────────┐
-           │                        │         NATS                │
-           │                        │    Event Bus / PubSub       │
-┌──────────▼──────────┐             └──┬──────────┬──────────┬────┘
-│    PostgreSQL       │                │          │          │
-│  Agents · Logs      │     ┌──────────▼──┐  ┌───▼──────┐  ┌▼──────────────┐
-│  Executions         │     │  Executor   │  │ Metrics  │  │    Event      │
-│  Metrics            │     │   (Go)      │  │Collector │  │   Processor   │
-└─────────────────────┘     │ Docker Mgmt │  │  (Go)    │  │    (Go)       │
-                            └──────┬──────┘  └───┬──────┘  └───────────────┘
-┌─────────────────────┐            │              │
-│       Redis         │     ┌──────▼──────────────▼──────────────┐
-│  Cache · Buffers    │     │           Docker Engine             │
-└─────────────────────┘     │   Agent Container 1 | 2 | 3 | N    │
-                            └─────────────────────────────────────┘
-                            ┌─────────────────────────────────────┐
-                            │    Prometheus  │  Grafana            │
-                            │    Metrics     │  Dashboards         │
-                            └─────────────────────────────────────┘
-```
+**Backend:** Python 3.11 / FastAPI — handles API, auth, billing, and orchestration logic  
+**Microservices:** Go 1.21 — the 28 Go services handle the actual runtime work  
+**Frontend:** Next.js 14 (App Router) — the control plane UI  
+**Database:** PostgreSQL 16 with pgvector extension  
+**Cache:** Redis 7  
+**Event bus:** NATS JetStream  
+**Observability:** Prometheus + Grafana + OpenTelemetry
 
 ---
 
-## 🏗️ Architecture
+## Getting started
 
-### Component Map
-
-```
-platform/
-├── backend/              ← Python/FastAPI control plane
-├── executor/             ← Go service: Docker container lifecycle
-├── metrics-collector/    ← Go service: CPU/mem metrics → NATS + Prometheus
-├── event-processor/      ← Go service: NATS event consumer
-├── websocket-gateway/    ← Go service: NATS → WebSocket bridge
-├── frontend/             ← Next.js real-time dashboard
-├── agent-runtime/        ← Python LangGraph agent (example workload)
-└── docker-compose.yml    ← Full stack orchestration
-```
-
-### Data Flow
-
-```
-Agent Action (start/stop)
-        │
-        ▼
-  FastAPI Backend  ──────────────────────► PostgreSQL
-        │                                  (persist state)
-        │ publish event
-        ▼
-      NATS
-   ┌────┴──────────────────────┐
-   │                           │
-   ▼                           ▼
-Executor                WebSocket Gateway
-(manages Docker)        (push to browser)
-   │
-   ▼
-Docker Container
-(agent workload)
-   │
-   ▼
-Metrics Collector
-(every 5 seconds)
-   │
-   ├──► NATS (live metrics)
-   └──► Prometheus /metrics
-```
-
-### Service Responsibilities
-
-| Service | Language | Port | Responsibility |
-|---------|----------|------|----------------|
-| **Backend** | Python/FastAPI | 8000 | REST API, agent management, DB persistence, auth |
-| **Executor** | Go | 8081 | Docker container create/start/stop/delete, log streaming |
-| **Metrics Collector** | Go | 8082 | Docker stats → NATS + Prometheus every 5s |
-| **Event Processor** | Go | 8083 | NATS consumer for long-term storage and alerting |
-| **WebSocket Gateway** | Go | 8084 | NATS → WebSocket bridge for frontend live updates |
-| **Frontend** | Next.js | 3000 | Real-time dashboard with graphs, logs, event feed |
-| **NATS** | - | 4222 | Lightweight event bus |
-| **PostgreSQL** | - | 5432 | Persistent store for all entities |
-| **Redis** | - | 6379 | Cache and live log buffer |
-| **Prometheus** | - | 9090 | Metrics scraping and storage |
-| **Grafana** | - | 3001 | Metrics dashboards |
-
----
-
-## ✨ Key Features
-
-### Agent Lifecycle Management
-- Create agents with custom Docker images, resource limits, environment variables
-- Start, stop, restart, and delete with full state tracking
-- States: `created` → `running` → `stopped` / `failed`
-- Auto-restart on failure with configurable retry count
-
-### Real-Time Observability
-- Live CPU and memory graphs streamed via WebSocket
-- Per-agent sparklines on the dashboard
-- System-wide aggregate metrics (avg CPU, avg mem, events/s, metrics/s)
-- Event feed showing all state transitions in real time
-
-### Execution Tracking
-- Full audit trail: every `start` creates an `Execution` record
-- Tracks start time, end time, duration, exit code, and output
-- Linked logs for each execution
-
-### Metrics Pipeline
-```
-Docker Stats API → Metrics Collector → NATS (live)
-                                     → Prometheus (historical)
-                                     → PostgreSQL (queryable)
-```
-
-### Event-Driven Architecture
-All state changes publish to NATS subjects:
-```
-agents.events     ← agent.started, agent.stopped, agent.failed, agent.heartbeat
-agents.metrics    ← CPU/mem snapshots every 5s
-agents.logs       ← log lines from running containers
-```
-
-### Security Hardening
-- Security headers: `X-Content-Type-Options`, `X-Frame-Options`, `X-XSS-Protection`, `Cross-Origin-Resource-Policy`
-- Input validation via Pydantic on all endpoints
-- OWASP ZAP scanned: 0 HIGH, 0 MEDIUM findings
-
----
-
-## 🛠️ Technology Stack
-
-| Layer | Technologies |
-|-------|-------------|
-| **Backend API** | Python 3.11, FastAPI, SQLAlchemy (async), Pydantic v2, Alembic |
-| **Go Services** | Go 1.24, Docker SDK v27, NATS.go, Gin, Prometheus client |
-| **Frontend** | Next.js 14, TypeScript, Tailwind CSS, Recharts, WebSocket API |
-| **Messaging** | NATS (JetStream optional) |
-| **Databases** | PostgreSQL 15, Redis 7 |
-| **Observability** | Prometheus, Grafana, OpenTelemetry, structlog |
-| **Containers** | Docker Engine, Docker Compose v2 |
-| **Testing** | pytest, Jest, k6, OWASP ZAP, Pumba |
-| **CI/CD** | GitHub Actions |
-
----
-
-## 📋 Prerequisites
-
-- **Docker** ≥ 24.x and **Docker Compose** v2.x
-- **Git**
-- *(Optional, for local dev)* Node.js 20+, Go 1.24+, Python 3.11+
-
----
-
-## 🚀 Quick Start
-
-### 1. Clone the repository
+You need Docker and Docker Compose v2. That's it.
 
 ```bash
-git clone https://github.com/poonia-98/AI-Infra.git
-cd AI-Infra/platform
+git clone https://github.com/your-org/agentplane
+cd agentplane
+pip install -e cli/
+agentplane install
 ```
 
-### 2. Start all services
+The install command will generate your `.env` with random secrets, pull images, run all 10 migrations, seed a demo agent, and open the dashboard. First run takes a few minutes while images download. After that, `agentplane up` starts everything in under 30 seconds.
 
-```bash
-docker compose up -d
-```
+Once running:
 
-Wait for everything to become healthy:
-
-```bash
-docker compose ps
-# All services should show "healthy" or "running"
-```
-
-### 3. Open the dashboard
-
-```
-http://localhost:3000
-```
-
-### 4. Deploy your first agent
-
-```bash
-# Create an agent
-curl -X POST http://localhost:8000/api/v1/agents \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "hello-world",
-    "image": "alpine:latest",
-    "agent_type": "langgraph",
-    "config": {"command": "echo Hello from my first agent"}
-  }'
-
-# Start it (replace <id> with the returned id)
-curl -X POST http://localhost:8000/api/v1/agents/<id>/start
-
-# Check its logs
-curl http://localhost:8000/api/v1/agents/<id>/logs?limit=20
-
-# Stop and clean up
-curl -X POST http://localhost:8000/api/v1/agents/<id>/stop
-curl -X DELETE http://localhost:8000/api/v1/agents/<id>
-```
-
-Or use the dashboard: click **DEPLOY AGENT**, fill in the form, and click **Start**.
+| URL | What's there |
+|-----|-------------|
+| http://localhost:3000 | Control plane dashboard |
+| http://localhost:8000/docs | API documentation |
+| http://localhost:8200 | Control Brain API |
+| http://localhost:3001 | Grafana (admin/admin) |
+| http://localhost:9090 | Prometheus |
 
 ---
 
-## 📁 Project Structure
+## CLI reference
+
+```bash
+agentplane install       # First-time setup — generates secrets, runs migrations, seeds data
+agentplane up            # Start everything
+agentplane down          # Stop everything
+agentplane restart       # Stop then start
+agentplane status        # Live health table of all 35 services
+agentplane logs backend  # Tail logs for a specific service
+agentplane migrate       # Run pending SQL migrations
+agentplane deploy-agent  # Interactive wizard to deploy an agent
+agentplane brain         # Show Control Brain state and agent statuses
+agentplane services      # List all registered microservices and their health
+agentplane reset         # Nuclear option — wipes volumes, starts fresh
+agentplane dashboard     # Open the browser
+```
+
+---
+
+## Project structure
 
 ```
-platform/
-├── backend/
-│   ├── main.py                 ← FastAPI app, middleware, lifespan
-│   ├── models.py               ← SQLAlchemy ORM models
-│   ├── schemas.py              ← Pydantic request/response schemas
-│   ├── database.py             ← Async engine and session factory
-│   ├── config.py               ← Environment-based settings
+agentplane/
+│
+├── backend/                    # FastAPI application — the main API
+│   ├── main.py                 # App entrypoint, all routers registered here
+│   ├── config.py               # Settings via pydantic-settings
+│   ├── database.py             # Async SQLAlchemy setup
+│   ├── models.py               # ORM models
 │   ├── routers/
-│   │   ├── agents.py           ← Agent CRUD + lifecycle endpoints
-│   │   └── data.py             ← Logs, metrics, events, alerts, containers
+│   │   ├── agents.py           # Core agent CRUD and lifecycle
+│   │   ├── data.py             # Logs, events, metrics, executions
+│   │   ├── infrastructure.py   # Schedules, nodes
+│   │   ├── platform_ops.py     # Config, secrets, audit, queue
+│   │   ├── time_travel.py      # Execution replay API
+│   │   ├── brain.py            # Proxy to Control Brain service
+│   │   ├── enterprise/
+│   │   │   ├── auth.py         # JWT auth, SSO
+│   │   │   ├── organisations.py
+│   │   │   └── platform.py     # Workflows, versions, memory, marketplace
+│   │   └── cloud/
+│   │       ├── billing.py
+│   │       ├── observability.py
+│   │       ├── sandbox.py
+│   │       ├── simulation.py
+│   │       ├── regions.py
+│   │       ├── federation.py
+│   │       ├── evolution.py
+│   │       ├── knowledge.py
+│   │       └── vault.py
 │   ├── services/
-│   │   ├── agent_service.py    ← Business logic for agent management
-│   │   ├── alert_service.py    ← Alert rule evaluation
-│   │   ├── nats_service.py     ← NATS pub/sub wrapper
-│   │   └── redis_service.py    ← Redis cache wrapper
-│   └── tests/
-│       └── test_agents.py
+│   │   ├── agent_service.py    # Core agent business logic
+│   │   ├── brain_service.py    # HTTP client to Control Brain
+│   │   ├── cache_service.py    # Redis cache layer (replaces DB polling)
+│   │   ├── memory_service.py   # pgvector semantic memory
+│   │   ├── nats_service.py     # NATS connection and subscriptions
+│   │   ├── redis_service.py    # Redis connection and helpers
+│   │   └── ...
+│   └── middleware/
+│       ├── audit.py            # Every write goes to audit_logs
+│       └── rate_limit.py       # Per-org rate limiting via Redis
 │
-├── executor/
-│   └── main.go                 ← Docker container lifecycle manager
+├── control-brain/              # Go — Central orchestration layer
+├── executor/                   # Go — Docker-based agent execution
+├── k8s-executor/               # Go — Kubernetes-based execution
+├── memory-vector-engine/       # Go — pgvector semantic memory
+├── agent-autoscaler/           # Go — Scale agents based on queue depth
+├── agent-gateway/              # Go — Agent-to-agent routing
+├── agent-sandbox-manager/      # Go — Isolation policy enforcement
+├── agent-simulation-engine/    # Go — Synthetic workloads and chaos testing
+├── agent-evolution-engine/     # Go — Genetic algorithm optimization
+├── agent-federation-network/   # Go — Cross-org agent collaboration
+├── agent-observability/        # Go — Distributed tracing and lineage
+├── billing-engine/             # Go — Plans, invoices, usage
+├── subscription-manager/       # Go — Plan management
+├── usage-meter/                # Go — Real-time resource metering
+├── secrets-manager/            # Go — AES-256-GCM vault
+├── marketplace-service/        # Go — Agent marketplace
+├── marketplace-validator/      # Go — Publish validation
+├── global-scheduler/           # Go — Multi-region placement
+├── region-controller/          # Go — Regional agent management and failover
+├── cluster-controller/         # Go — Cluster lifecycle
+├── workflow-engine/            # Go — DAG workflow execution
+├── event-processor/            # Go — NATS event fan-out
+├── log-processor/              # Go — Batched log ingestion
+├── metrics-collector/          # Go — Container metrics scraping
+├── websocket-gateway/          # Go — Real-time push to UI
+├── reconciliation-service/     # Go — Drift detection and self-healing
+├── scheduler-service/          # Go — Cron and trigger scheduling
+├── node-manager/               # Go — Node heartbeat and capacity
+├── agent-runtime/              # Base agent container image
 │
-├── metrics-collector/
-│   └── main.go                 ← Docker stats → NATS + Prometheus
+├── frontend/                   # Next.js 14 control plane UI
+│   └── src/
+│       ├── app/
+│       │   ├── (auth)/login/   # Login page with boot animation
+│       │   └── (dashboard)/
+│       │       ├── page.tsx        # Overview dashboard
+│       │       ├── agents/         # Agent list and detail
+│       │       ├── brain/          # Control Brain state viewer
+│       │       ├── services/       # Service registry
+│       │       ├── memory/         # Agent memory browser
+│       │       ├── time-travel/    # Execution replay debugger
+│       │       ├── federation/     # Federation peer management
+│       │       ├── evolution/      # Experiment viewer
+│       │       ├── simulation/     # Simulation environments
+│       │       ├── sandbox/        # Isolation policies
+│       │       ├── observability/  # Traces and performance
+│       │       ├── regions/        # Region and failover view
+│       │       ├── billing/        # Plans and invoices
+│       │       ├── vault/          # Secrets management
+│       │       └── knowledge/      # Knowledge base
+│       ├── components/
+│       │   └── Sidebar.tsx     # Navigation with 6 sections
+│       ├── contexts/
+│       │   └── AuthContext.tsx # JWT auth context
+│       ├── lib/
+│       │   ├── api.ts          # All API client methods
+│       │   └── auth.ts         # Token management (memory-only, no localStorage)
+│       └── middleware.ts       # Route protection
 │
-├── event-processor/
-│   └── main.go                 ← NATS consumer for events
+├── migrations/                 # SQL migration files
+│   ├── init.sql
+│   ├── 0004_production_infrastructure.sql
+│   ├── 0005_enterprise.sql
+│   ├── 0006_global_platform.sql
+│   ├── 0007_cloud_platform_extension.sql
+│   ├── 0008_complete_cloud_platform.sql
+│   ├── 0009_advanced_features.sql
+│   └── 0010_platform_completion.sql
 │
-├── websocket-gateway/
-│   └── main.go                 ← NATS → WebSocket bridge
+├── cli/
+│   └── agentplane.py           # Single-file CLI tool
 │
-├── frontend/
-│   └── src/app/
-│       ├── page.tsx            ← Main dashboard
-│       └── agents/[id]/        ← Agent detail page
+├── docs/
+│   └── ARCHITECTURE.md         # Full architecture documentation
 │
-├── agent-runtime/
-│   └── agent.py                ← LangGraph example agent
-│
+├── helm/                       # Kubernetes Helm charts
+├── grafana/                    # Grafana dashboard definitions
+├── prometheus/                 # Prometheus config
+├── otel/                       # OpenTelemetry collector config
 ├── docker-compose.yml
-└── .github/
-    └── workflows/
-        └── ci.yml              ← GitHub Actions CI pipeline
+└── .env.example
 ```
 
 ---
 
-## 📚 API Reference
+## How the services talk to each other
 
-Full OpenAPI spec: `http://localhost:8000/openapi.json`
+Everything runs inside a Docker network called `platform_network`. Services communicate over HTTP and via NATS for events.
 
-Interactive docs: `http://localhost:8000/docs`
+The general flow:
 
-### Agents
+1. A request comes into the **backend** API on port 8000
+2. The backend either handles it directly or delegates to a Go service
+3. State changes get published to NATS as events
+4. Services that care about that event update their own state
+5. The backend subscribes to `agents.events` and keeps Redis in sync — nothing polls the database for agent status
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/v1/agents` | List all agents |
-| `POST` | `/api/v1/agents` | Create a new agent |
-| `GET` | `/api/v1/agents/{id}` | Get agent details |
-| `PUT` | `/api/v1/agents/{id}` | Update agent config |
-| `DELETE` | `/api/v1/agents/{id}` | Delete agent |
-| `POST` | `/api/v1/agents/{id}/start` | Start agent container |
-| `POST` | `/api/v1/agents/{id}/stop` | Stop agent container |
-| `POST` | `/api/v1/agents/{id}/restart` | Restart agent |
-
-### Data
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/v1/logs` | List logs (filterable by level, agent, time) |
-| `GET` | `/api/v1/events` | List events |
-| `GET` | `/api/v1/metrics` | List metric snapshots |
-| `GET` | `/api/v1/metrics/timeseries` | Time-bucketed metric series |
-| `GET` | `/api/v1/executions` | List executions |
-| `GET` | `/api/v1/alerts/rules` | List alert rules |
-| `POST` | `/api/v1/alerts/rules` | Create alert rule |
-| `GET` | `/api/v1/containers` | List container records |
-
-### WebSocket
+The **Control Brain** on port 8200 sits above all of this. It runs a reconciliation loop every 10 seconds — comparing what the database says should be running against what's actually running — and issues corrective commands when they diverge. Placement decisions also go through the brain: when you deploy an agent, it picks which node and region gets it based on current capacity.
 
 ```
-ws://localhost:8084/ws
+Incoming request
+    ↓
+Backend API (:8000)
+    ↓
+Go service (executor, billing, etc.)
+    ↓
+NATS: agents.events
+    ↓
+Event processor fans out
+    ↓
+Redis cache updated — no DB polling
+    ↓
+WebSocket gateway pushes to UI
 ```
-
-Messages are JSON with `type` field: `agent.started`, `agent.stopped`, `agent.heartbeat`, `metric.snapshot`, `log.line`
 
 ---
 
-## 🧪 Testing
+## Key features
 
-### Unit Tests
+### Control Brain
+
+Every agent deployment, scale event, and failover goes through the Control Brain. It maintains in-memory state of the entire platform and reconciles against reality on a configurable interval. If a service registers and then stops heartbeating, the brain marks it degraded and can trigger failover. The brain's state is visible at `/api/v1/brain/state` and from the CLI with `agentplane brain`.
+
+### Vector Memory
+
+Agents can store memories that persist across executions. The memory engine uses pgvector's HNSW index for cosine similarity search over 1536-dimensional embeddings. Memories have types — episodic, semantic, procedural, working — and TTLs. Short-term memories expire after 24 hours by default. Semantic memories don't expire unless you set a TTL explicitly.
+
+You need `OPENAI_API_KEY` set for embedding generation, or you can point `EMBEDDING_API_URL` at any OpenAI-compatible endpoint.
+
+### Time Travel Debugger
+
+Every execution step gets stored — the full prompt, the completion, the tool call and its result, timing, cost. The time travel UI lets you browse the timeline of any execution and click into any step for full detail. You can replay from any step, which creates a new execution branch. You can also edit the prompt at a specific step and see what would have happened differently. Useful both for development debugging and production post-mortems.
+
+### Agent Evolution
+
+The evolution engine runs a genetic algorithm over agent configurations. You create an experiment, define population size and mutation rate, and let it run. Each genome varies the base agent — different prompt phrasing, tool selection, workflow steps. Fitness is a weighted combination of task success rate, latency, and cost. Top performers survive to the next generation. After enough generations, promote the best genome as the new production agent version.
+
+### Federation
+
+Organizations can connect their AgentPlane instances as federation peers. A research agent in your deployment can delegate a summarization task to an agent running in a partner organization's deployment. Tasks are HMAC-signed. Trust levels — full, partial, sandboxed — control what the remote agent can access. The requesting org pays for the remote execution through a billing settlement system.
+
+### Simulation Engine
+
+Before pushing a new agent version to production, you can throw synthetic load at it. The simulation engine supports load tests, chaos scenarios that randomly kill agents mid-execution, tool latency injection, and region outage simulation. Results include p50/p95/p99 latency, failure rates, and estimated cost.
+
+### Sandbox Isolation
+
+Agents run inside one of three isolation modes depending on the configured policy: standard Docker namespaces, gVisor for syscall filtering, or Firecracker microVMs for maximum isolation. Sandbox policies define CPU and memory caps, network access rules, and permitted syscalls.
+
+---
+
+## Authentication
+
+The frontend uses a two-token system. The access token lives in JavaScript memory only — never localStorage, never sessionStorage. The refresh token is stored as an HttpOnly cookie, so XSS attacks can't steal it. Route protection runs at two layers: Next.js middleware checks for the session cookie before the page loads, and the auth context does a secondary check client-side. Login has a 5-attempt lockout with a 30-second cooldown.
+
+Service-to-service calls inside the platform use `X-Service-API-Key` headers, not user JWT tokens.
+
+---
+
+## Configuration
+
+Copy `.env.example` to `.env` before first run. `agentplane install` does this automatically and replaces placeholder values with real random secrets. Things you'll likely want to set manually:
 
 ```bash
-# Backend
-cd backend && pytest tests/ -v
+# Required for vector memory
+OPENAI_API_KEY=sk-...
 
-# Frontend
-cd frontend && npm test -- --ci --coverage
+# Required for Stripe billing
+STRIPE_SECRET_KEY=sk_live_...
+STRIPE_WEBHOOK_SECRET=whsec_...
 
-# Go services
-cd executor && go build ./...
-cd metrics-collector && go build ./...
-cd event-processor && go build ./...
-cd websocket-gateway && go build ./...
+# Optional — SSO login
+GOOGLE_CLIENT_ID=...
+GITHUB_CLIENT_ID=...
 ```
 
-### Integration Tests
+Everything else has working defaults for local development.
+
+---
+
+## Running migrations manually
 
 ```bash
-docker compose up -d --wait
+# Via CLI
+agentplane migrate
 
-# Full agent lifecycle smoke test
+# Directly via psql
+docker compose exec -T postgres psql -U postgres -d agentdb < migrations/0010_platform_completion.sql
+```
+
+Migrations are plain SQL files numbered sequentially. They use `CREATE TABLE IF NOT EXISTS` throughout so running them more than once is safe.
+
+---
+
+## Adding a new agent
+
+Via CLI:
+```bash
+agentplane deploy-agent
+```
+
+Via API:
+```bash
 curl -X POST http://localhost:8000/api/v1/agents \
   -H "Content-Type: application/json" \
-  -d '{"name":"ci-agent","image":"alpine:latest","agent_type":"langgraph","config":{}}' \
-  | tee /tmp/agent.json
-
-AGENT_ID=$(jq -r .id /tmp/agent.json)
-curl -X POST http://localhost:8000/api/v1/agents/$AGENT_ID/start
-sleep 5
-curl http://localhost:8000/api/v1/agents/$AGENT_ID/logs?limit=5
-curl -X DELETE http://localhost:8000/api/v1/agents/$AGENT_ID
+  -H "Authorization: Bearer <token>" \
+  -d '{
+    "name": "research-agent",
+    "docker_image": "agent-runtime:latest",
+    "cpu_limit": 1.0,
+    "memory_limit": "512m",
+    "env_vars": {
+      "AGENT_ROLE": "research",
+      "OPENAI_API_KEY": "sk-..."
+    }
+  }'
 ```
 
-### Performance Tests (k6)
+Via the dashboard: Agents → New Agent.
+
+---
+
+## Port reference
+
+| Port | Service |
+|------|---------|
+| 3000 | Frontend dashboard |
+| 3001 | Grafana |
+| 4222 | NATS |
+| 4317 | OTEL collector (gRPC) |
+| 5432 | PostgreSQL |
+| 6379 | Redis |
+| 8000 | Backend API |
+| 8081 | Executor |
+| 8082 | Event processor |
+| 8083 | Metrics collector |
+| 8084 | WebSocket gateway |
+| 8085 | Reconciliation service |
+| 8086 | Scheduler service |
+| 8087 | Node manager |
+| 8088 | Log processor |
+| 8092 | Workflow engine |
+| 8093 | Agent autoscaler |
+| 8094 | Agent gateway |
+| 8095 | Marketplace service |
+| 8096 | Agent sandbox manager |
+| 8097 | Agent simulation engine |
+| 8098 | Global scheduler |
+| 8099 | Region controller |
+| 8100 | Usage meter |
+| 8101 | Billing engine |
+| 8102 | Subscription manager |
+| 8103 | Memory vector engine |
+| 8104 | Secrets manager |
+| 8105 | Marketplace validator |
+| 8106 | Agent evolution engine |
+| 8107 | Agent federation network |
+| 8108 | Cluster controller |
+| 8109 | Agent observability |
+| 8200 | Control Brain |
+| 9090 | Prometheus |
+
+---
+
+## Deploying to production
+
+The platform ships with a Helm chart in `helm/` for Kubernetes deployments.
 
 ```bash
-# Baseline read-only test — 100 VUs
-k6 run baseline-test.js -e BASE_URL=http://localhost:8000/api/v1
-
-# Agent lifecycle test — 15 VUs
-k6 run lifecycle-test.js -e BASE_URL=http://localhost:8000/api/v1
+helm install agentplane ./helm/ai-platform \
+  --namespace agentplane \
+  --create-namespace \
+  --set backend.secretKey="<your-secret>" \
+  --set postgres.password="<your-password>" \
+  --set openai.apiKey="<your-key>"
 ```
 
-Expected results:
-- Read endpoints: p95 < 500ms at 100 concurrent users
-- Container lifecycle: p95 < 10s at 15 concurrent users (Docker overhead)
-
-### Security Tests (OWASP ZAP)
-
-```bash
-# Passive baseline scan
-docker run --network platform_network \
-  -v "$(pwd)/zap-reports:/zap/wrk/:rw" \
-  ghcr.io/zaproxy/zaproxy:stable \
-  zap-baseline.py -t http://backend:8000 -r baseline.html
-
-# Active API scan
-docker run --network platform_network \
-  -v "$(pwd)/zap-reports:/zap/wrk/:rw" \
-  ghcr.io/zaproxy/zaproxy:stable \
-  zap-api-scan.py -t http://backend:8000/openapi.json -f openapi -a -r full_scan.html
-```
-
-Current scan results: **0 FAIL, 5 WARN (Low severity only)**
-
-### Chaos Engineering (Pumba)
-
-```bash
-# Kill executor mid-run to test recovery
-docker run --rm \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  gaiaadm/pumba kill --signal SIGKILL platform-executor-1
-
-# Inject 3s network delay on backend
-docker run --rm \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  gaiaadm/pumba netem --duration 1m delay --time 3000 platform-backend-1
-```
+For production you'll want external managed services for Postgres, Redis, and NATS rather than the containerized versions. Set the corresponding `DATABASE_URL`, `REDIS_URL`, and `NATS_URL` environment variables. Put the frontend behind a CDN. Set `CORS_ORIGINS` to your actual domain. Make sure all secrets are real random values at least 32 characters long.
 
 ---
 
-## 🔁 CI/CD
+## Common issues
 
-Every push to `main`, `develop`, or `master` runs:
+**Services failing to build with `missing go.sum entry`**
 
-```
-┌─────────────────────┐    ┌──────────────────────┐    ┌─────────────────────┐
-│  backend-unit-tests │    │ frontend-unit-tests   │    │   go-build-check    │
-│  pytest tests/ -v   │    │ npm test --coverage   │    │ go build ./...      │
-│                     │    │                       │    │ (all 4 Go services) │
-└──────────┬──────────┘    └──────────┬────────────┘    └──────────┬──────────┘
-           │                          │                            │
-           └──────────────────────────┼────────────────────────────┘
-                                      │
-                          ┌───────────▼────────────┐
-                          │   integration-tests    │
-                          │ docker compose up -d   │
-                          │ full lifecycle smoke   │
-                          └────────────────────────┘
+The Dockerfile needs to copy all source files before running `go mod tidy`, not before. Use this pattern:
+
+```dockerfile
+COPY . .
+RUN GONOSUMDB=* GOFLAGS=-mod=mod go mod tidy
+RUN CGO_ENABLED=0 GOOS=linux GONOSUMDB=* GOFLAGS=-mod=mod go build -o service .
 ```
 
-Performance tests run on manual trigger (`workflow_dispatch`) or schedule.
+**Backend fails to start**
+
+Check postgres health first. The backend retries 10 times at 3-second intervals, but if postgres takes more than 30 seconds you'll see connection errors. `agentplane logs postgres` will show what's happening.
+
+**pgvector extension missing**
+
+The migrations enable it, but if you're connecting to external Postgres the instance needs pgvector installed. Most managed cloud providers support it as an optional extension.
+
+**Control Brain shows no services**
+
+Services self-register with the Control Brain on startup. If the brain started after the other services, they haven't had a chance to register yet. Either restart the services (`docker compose restart backend`) or wait for the next reconciliation cycle. The brain reconciles every 10 seconds by default.
+
+**Memory search returns nothing**
+
+Vector search requires `OPENAI_API_KEY` or a compatible embedding endpoint set in your `.env`. Without it, memories get stored but without embeddings, so similarity search has nothing to compare against.
 
 ---
 
-## 📊 Observability
+## License
 
-### Metrics
-
-Prometheus scrapes two endpoints:
-- `http://backend:8000/metrics` — API request counts, latencies
-- `http://metrics-collector:8082/metrics` — per-container CPU, memory, network I/O
-
-Access Prometheus at `http://localhost:9090`
-
-### Grafana
-
-Pre-configured dashboards at `http://localhost:3001`
-- Login: `admin` / `admin`
-- Dashboards: Agent Overview, System Metrics, Request Rates
-
-### Logs
-
-All services log structured JSON to stdout:
-
-```bash
-# Follow all service logs
-docker compose logs -f
-
-# Single service
-docker logs -f platform-backend-1
-```
-
-### Health Endpoints
-
-| Service | Health Check |
-|---------|-------------|
-| Backend | `GET http://localhost:8000/health` |
-| Executor | `GET http://localhost:8081/health` |
-| Metrics Collector | `GET http://localhost:8082/health` |
-| WebSocket Gateway | `GET http://localhost:8084/health` |
-
----
-
-## 🔒 Security
-
-### Headers Applied to All Responses
-
-```
-X-Content-Type-Options: nosniff
-X-Frame-Options: DENY
-X-XSS-Protection: 1; mode=block
-Cross-Origin-Resource-Policy: cross-origin
-Referrer-Policy: strict-origin-when-cross-origin
-```
-
-### Input Validation
-
-All API inputs validated via Pydantic v2 — invalid inputs return `422 Unprocessable Entity`, never `500`.
-
-### Network Isolation
-
-All services run on an isolated Docker network (`platform_network`). Only ports `3000`, `8000`, and `8084` are exposed to the host.
-
-### OWASP ZAP Scan Results
-
-| Severity | Count | Status |
-|----------|-------|--------|
-| HIGH | 0 | ✅ Clean |
-| MEDIUM | 0 | ✅ Clean |
-| LOW | 5 | ⚠️ Accepted |
-| INFORMATIONAL | — | ℹ️ |
-
----
-
-## 📈 Roadmap
-
-- [x] Agent lifecycle (create/start/stop/delete)
-- [x] Real-time metrics and logs via WebSocket
-- [x] Prometheus + Grafana integration
-- [x] NATS event bus
-- [x] Security headers and input validation
-- [x] CI/CD pipeline with GitHub Actions
-- [x] OWASP ZAP security scanning
-- [x] k6 performance testing
-- [x] Chaos engineering with Pumba
-- [ ] Full log streaming from executor to frontend
-- [ ] Kubernetes operator for hybrid deployments
-- [ ] Multi-tenancy and RBAC
-- [ ] Webhook integrations for external events
-- [ ] Helm charts for Kubernetes deployment
-- [ ] Distributed tracing (OpenTelemetry)
-- [ ] Alert notifications (Slack, PagerDuty)
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome!
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feat/my-feature`
-3. Make your changes and add tests
-4. Run the test suite: `pytest tests/ -v && npm test && go build ./...`
-5. Submit a pull request
-
-Please follow conventional commit messages: `feat:`, `fix:`, `docs:`, `chore:`.
-
----
-
-## 📄 License
-
-This project is licensed under the **Apache License 2.0** — see the [LICENSE](LICENSE) file for details.
-
----
-
-## 💬 Community
-
-- [GitHub Issues](https://github.com/poonia-98/AI-Infra/issues) — report bugs or request features
-- [Discussions](https://github.com/poonia-98/AI-Infra/discussions) — ask questions and share ideas
-
----
-
-Built with ❤️ by developers who believe AI agents deserve great infrastructure.
+Enterprise. All rights reserved.

@@ -1,0 +1,55 @@
+{{- if .Values.agentGateway.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-platform.component.fullname" (dict "root" . "component" "agent-gateway") }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-gateway
+spec:
+  replicas: {{ .Values.agentGateway.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ai-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: agent-gateway
+  template:
+    metadata:
+      labels:
+        {{- include "ai-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: agent-gateway
+    spec:
+      containers:
+        - name: agent-gateway
+          image: {{ include "ai-platform.image" (dict "root" . "image" .Values.agentGateway.image) }}
+          imagePullPolicy: {{ .Values.agentGateway.image.pullPolicy }}
+          ports:
+            - containerPort: 8094
+          env:
+            - name: PORT
+              value: "8094"
+            - name: DATABASE_URL
+              value: {{ include "ai-platform.dbUrl" . }}
+            - name: NATS_URL
+              value: {{ .Values.global.natsUrl | quote }}
+            - name: CONTROL_PLANE_URL
+              value: {{ .Values.global.controlPlaneUrl | quote }}
+          resources:
+            {{- toYaml .Values.agentGateway.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-platform.component.fullname" (dict "root" . "component" "agent-gateway") }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-gateway
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "ai-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-gateway
+  ports:
+    - port: 8094
+      targetPort: 8094
+      name: http
+{{- end }}

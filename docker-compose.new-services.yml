@@ -1,0 +1,161 @@
+version: '3.9'
+
+services:
+  k8s-executor:
+    build:
+      context: ./k8s-executor
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: "8091"
+      NATS_URL: nats://nats:4222
+      CONTROL_PLANE_URL: http://backend:8000
+      K8S_NAMESPACE: ai-agents
+      POD_TTL_SECONDS: "3600"
+      NODE_ID: k8s-executor
+    ports:
+      - "8091:8091"
+    networks:
+      - platform_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
+  workflow-engine:
+    build:
+      context: ./workflow-engine
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: "8092"
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/agentdb?sslmode=disable
+      NATS_URL: nats://nats:4222
+      CONTROL_PLANE_URL: http://backend:8000
+      POLL_INTERVAL: "2s"
+    ports:
+      - "8092:8092"
+    networks:
+      - platform_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
+  agent-autoscaler:
+    build:
+      context: ./agent-autoscaler
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: "8093"
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/agentdb?sslmode=disable
+      NATS_URL: nats://nats:4222
+      CONTROL_PLANE_URL: http://backend:8000
+      METRICS_URL: http://metrics-collector:8083
+      EVAL_INTERVAL: "15s"
+    ports:
+      - "8093:8093"
+    networks:
+      - platform_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      metrics-collector:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
+  agent-gateway:
+    build:
+      context: ./agent-gateway
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: "8094"
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/agentdb?sslmode=disable
+      NATS_URL: nats://nats:4222
+      CONTROL_PLANE_URL: http://backend:8000
+    ports:
+      - "8094:8094"
+    networks:
+      - platform_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
+  marketplace-service:
+    build:
+      context: ./marketplace-service
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: "8095"
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/agentdb?sslmode=disable
+      NATS_URL: nats://nats:4222
+    ports:
+      - "8095:8095"
+    networks:
+      - platform_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
+  execution-queue:
+    build:
+      context: ./execution-queue
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: "8096"
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/agentdb?sslmode=disable
+      REDIS_URL: redis://redis:6379
+      NATS_URL: nats://nats:4222
+      LEASE_SECONDS: "45"
+      VISIBILITY_TIMEOUT_SECONDS: "120"
+      CLAIM_BATCH: "20"
+      MAX_INFLIGHT: "500"
+      REQUEUE_INTERVAL: "5s"
+    ports:
+      - "8096:8096"
+    networks:
+      - platform_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+networks:
+  platform_network:
+    external: true
+

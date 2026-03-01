@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -195,6 +196,9 @@ func persistLog(cpURL, agentID, message, level, source string) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if apiKey := os.Getenv("CONTROL_PLANE_API_KEY"); apiKey != "" {
+		req.Header.Set("X-Service-API-Key", apiKey)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err == nil {
 		resp.Body.Close()
@@ -229,10 +233,22 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
+func requireServiceAuth(expectedKey string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		got := c.GetHeader("X-Service-API-Key")
+		if expectedKey == "" || subtle.ConstantTimeCompare([]byte(got), []byte(expectedKey)) != 1 {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		c.Next()
+	}
+}
+
 func main() {
 	natsURL := getEnv("NATS_URL", "nats://nats:4222")
 	cpURL   := getEnv("CONTROL_PLANE_URL", "http://backend:8000")
 	network := getEnv("AGENT_NETWORK", "platform_network")
+	serviceAPIKey := getEnv("CONTROL_PLANE_API_KEY", "")
 
 	dc, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
@@ -272,7 +288,10 @@ func main() {
 		c.JSON(200, gin.H{"status": "healthy", "service": "executor"})
 	})
 
-	r.POST("/containers/start", func(c *gin.Context) {
+	protected := r.Group("/")
+	protected.Use(requireServiceAuth(serviceAPIKey))
+
+	protected.POST("/containers/start", func(c *gin.Context) {
 		var req ContainerStartRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(400, ContainerResponse{Success: false, Error: err.Error()})
@@ -345,7 +364,7 @@ func main() {
 		c.JSON(200, ContainerResponse{Success: true, ContainerID: resp.ID, ContainerName: req.Name})
 	})
 
-	r.POST("/containers/stop", func(c *gin.Context) {
+	protected.POST("/containers/stop", func(c *gin.Context) {
 		var req ContainerStopRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(400, ContainerResponse{Success: false, Error: err.Error()})
@@ -382,7 +401,7 @@ func main() {
 		c.JSON(200, ContainerResponse{Success: true, ContainerID: cid})
 	})
 
-	r.GET("/containers", func(c *gin.Context) {
+	protected.GET("/containers", func(c *gin.Context) {
 		ctx := context.Background()
 		f := filters.NewArgs()
 		f.Add("label", "platform.managed=true")
@@ -402,7 +421,7 @@ func main() {
 		c.JSON(200, out)
 	})
 
-	r.GET("/containers/:agent_id/stats", func(c *gin.Context) {
+	protected.GET("/containers/:agent_id/stats", func(c *gin.Context) {
 		agentID := c.Param("agent_id")
 		ctx := context.Background()
 		f := filters.NewArgs()
@@ -439,6 +458,40 @@ func main() {
 	})
 
 	port := getEnv("PORT", "8081")
+	nodeID := getEnv("NODE_ID", "executor-default")
+	hostname, _ := os.Hostname()
+
+	// ── Register heartbeat with control plane ──────────────────────────
+	go func() {
+		hbClient := &http.Client{Timeout: 5 * time.Second}
+		sendHeartbeat := func() {
+			payload, _ := json.Marshal(map[string]interface{}{
+				"node_id":  nodeID,
+				"hostname": hostname,
+				"address":  "http://executor:" + port,
+				"port":     8081,
+			})
+			req, err := http.NewRequest("POST", cpURL+"/api/v1/nodes/heartbeat", bytes.NewReader(payload))
+			if err != nil {
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			if serviceAPIKey != "" {
+				req.Header.Set("X-Service-API-Key", serviceAPIKey)
+			}
+			resp, err := hbClient.Do(req)
+			if err == nil {
+				resp.Body.Close()
+			}
+		}
+		sendHeartbeat()
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			sendHeartbeat()
+		}
+	}()
+
 	log.Printf("[executor] Listening on :%s", port)
 	if err := r.Run(":" + port); err != nil {
 		log.Fatalf("[executor] Server error: %v", err)

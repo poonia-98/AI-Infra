@@ -1,0 +1,57 @@
+{{- if .Values.agentAutoscaler.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-platform.component.fullname" (dict "root" . "component" "agent-autoscaler") }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-autoscaler
+spec:
+  replicas: {{ .Values.agentAutoscaler.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ai-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: agent-autoscaler
+  template:
+    metadata:
+      labels:
+        {{- include "ai-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: agent-autoscaler
+    spec:
+      containers:
+        - name: agent-autoscaler
+          image: {{ include "ai-platform.image" (dict "root" . "image" .Values.agentAutoscaler.image) }}
+          imagePullPolicy: {{ .Values.agentAutoscaler.image.pullPolicy }}
+          ports:
+            - containerPort: 8093
+          env:
+            - name: PORT
+              value: "8093"
+            - name: DATABASE_URL
+              value: {{ include "ai-platform.dbUrl" . }}
+            - name: NATS_URL
+              value: {{ .Values.global.natsUrl | quote }}
+            - name: CONTROL_PLANE_URL
+              value: {{ .Values.global.controlPlaneUrl | quote }}
+            - name: METRICS_URL
+              value: {{ printf "http://%s-metrics-collector:8083" (include "ai-platform.fullname" .) | quote }}
+          resources:
+            {{- toYaml .Values.agentAutoscaler.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-platform.component.fullname" (dict "root" . "component" "agent-autoscaler") }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-autoscaler
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "ai-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: agent-autoscaler
+  ports:
+    - port: 8093
+      targetPort: 8093
+      name: http
+{{- end }}

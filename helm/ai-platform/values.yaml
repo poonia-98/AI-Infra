@@ -1,0 +1,708 @@
+# =============================================================================
+#  AI Platform — Helm values
+#  Override any value with: helm install ai-platform ./ai-platform -f my-values.yaml
+# =============================================================================
+
+global:
+  imageRegistry: ""        # Override: "registry.yourcompany.com/"
+  imagePullSecrets: []
+  storageClass: ""         # Leave empty to use cluster default
+  # Common environment passed to every service
+  natsUrl: "nats://ai-platform-nats:4222"
+  controlPlaneUrl: "http://ai-platform-backend:8000"
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Backend (FastAPI)
+# ─────────────────────────────────────────────────────────────────────────────
+backend:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: ai-platform/backend
+    tag: "2.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8000
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+  env:
+    secretKey: "change-me-in-production"
+    agentNetwork: "platform_network"
+    secretsPassphrase: "change-me-secrets-passphrase"
+    jwtAlgorithm: "HS256"
+    accessTokenExpireMinutes: 60
+    refreshTokenExpireDays: 30
+  # OAuth providers (set via --set or external secret)
+  oauth:
+    googleClientId: ""
+    googleClientSecret: ""
+    githubClientId: ""
+    githubClientSecret: ""
+    oidcDiscoveryUrl: ""
+    oidcClientId: ""
+    oidcClientSecret: ""
+  podAnnotations: {}
+  podLabels: {}
+  affinity: {}
+  tolerations: []
+  topologySpreadConstraints: []
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Executor (Docker runtime — Go)
+# ─────────────────────────────────────────────────────────────────────────────
+executor:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ai-platform/executor
+    tag: "2.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8081
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  # Mount host docker socket for container management
+  dockerSocket:
+    enabled: true
+    path: /var/run/docker.sock
+  env:
+    agentNetwork: "platform_network"
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Kubernetes Executor (Kubernetes runtime — Go)
+# ─────────────────────────────────────────────────────────────────────────────
+k8sExecutor:
+  enabled: false           # Enable when using Kubernetes as agent runtime
+  replicaCount: 1
+  image:
+    repository: ai-platform/k8s-executor
+    tag: "2.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8091
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  env:
+    defaultNamespace: "ai-agents"
+    podTtlSeconds: "3600"
+  serviceAccount:
+    create: true
+    name: "k8s-executor"
+    annotations: {}
+  rbac:
+    create: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Scheduler (Go)
+# ─────────────────────────────────────────────────────────────────────────────
+scheduler:
+  enabled: true
+  replicaCount: 2          # Both run; only leader is active
+  image:
+    repository: ai-platform/scheduler
+    tag: "2.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8086
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  env:
+    tickIntervalSeconds: "10"
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Reconciliation Service (Go)
+# ─────────────────────────────────────────────────────────────────────────────
+reconciliation:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: ai-platform/reconciliation
+    tag: "2.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8085
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  env:
+    reconcileInterval: "5s"
+    nodeHeartbeatTtl: "30s"
+    stuckStartingTtl: "120s"
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Node Manager (Go)
+# ─────────────────────────────────────────────────────────────────────────────
+nodeManager:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ai-platform/node-manager
+    tag: "2.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8087
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Log Processor (Go)
+# ─────────────────────────────────────────────────────────────────────────────
+logProcessor:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: ai-platform/log-processor
+    tag: "2.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8088
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  env:
+    batchSize: "100"
+    flushInterval: "2s"
+    workerCount: "4"
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  WebSocket Gateway (Go)
+# ─────────────────────────────────────────────────────────────────────────────
+wsGateway:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: ai-platform/ws-gateway
+    tag: "2.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8084
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Frontend (Next.js)
+# ─────────────────────────────────────────────────────────────────────────────
+frontend:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: ai-platform/frontend
+    tag: "2.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 3000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  env:
+    nextPublicApiUrl: ""    # Set to your ingress backend URL
+    nextPublicWsUrl: ""     # Set to your ingress ws URL
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Ingress
+# ─────────────────────────────────────────────────────────────────────────────
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    # Uncomment for cert-manager:
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  host: "platform.yourdomain.com"
+  tls:
+    enabled: false
+    secretName: "ai-platform-tls"
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Infrastructure dependencies
+# ─────────────────────────────────────────────────────────────────────────────
+postgresql:
+  enabled: true
+  auth:
+    username: postgres
+    password: postgres
+    database: agentdb
+  primary:
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+    persistence:
+      enabled: true
+      size: 50Gi
+  # For production, use read replicas:
+  readReplicas:
+    replicaCount: 0
+
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: false
+  master:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    persistence:
+      enabled: true
+      size: 8Gi
+
+nats:
+  enabled: true
+  nats:
+    jetstream:
+      enabled: true
+      memStorage:
+        enabled: true
+        size: 1Gi
+      fileStorage:
+        enabled: true
+        size: 10Gi
+  cluster:
+    enabled: false    # Set true for HA: 3 replicas
+    replicas: 3
+
+prometheus:
+  enabled: true
+  server:
+    persistentVolume:
+      enabled: true
+      size: 20Gi
+    retention: "30d"
+  alertmanager:
+    enabled: false  # Manage separately
+  pushgateway:
+    enabled: false
+
+grafana:
+  enabled: true
+  adminPassword: "change-me-grafana-password"
+  persistence:
+    enabled: true
+    size: 5Gi
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        - name: Prometheus
+          type: prometheus
+          url: http://{{ .Release.Name }}-prometheus-server
+          isDefault: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Shared secrets (stored as Kubernetes Secret)
+# ─────────────────────────────────────────────────────────────────────────────
+secrets:
+  # If existingSecret is set, all secret values are read from that secret
+  existingSecret: ""
+  databaseUrl: ""    # Overrides postgresql chart connection if set
+  redisUrl: ""
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Network policies
+# ─────────────────────────────────────────────────────────────────────────────
+networkPolicy:
+  enabled: false   # Set true in production
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Pod Disruption Budgets
+# ─────────────────────────────────────────────────────────────────────────────
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  New Platform Services
+# ─────────────────────────────────────────────────────────────────────────────
+workflowEngine:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: ai-platform/workflow-engine
+    tag: "2.0.0"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+agentAutoscaler:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ai-platform/agent-autoscaler
+    tag: "2.0.0"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+agentGateway:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: ai-platform/agent-gateway
+    tag: "2.0.0"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+marketplace:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: ai-platform/marketplace
+    tag: "2.0.0"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cloud Platform Extension Services (v3.0)
+# ─────────────────────────────────────────────────────────────────────────────
+
+agentObservability:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: ai-platform/agent-observability
+    tag: "3.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8109
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  env:
+    SNAPSHOT_INTERVAL: "60s"
+
+agentSandboxManager:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: ai-platform/agent-sandbox-manager
+    tag: "3.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8096
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  env:
+    GVISOR_ENABLED: "false"
+    FIRECRACKER_ENABLED: "false"
+    DEFAULT_RUNTIME: docker
+  securityContext:
+    privileged: false
+    runAsNonRoot: true
+    runAsUser: 65534
+
+secretsManager:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: ai-platform/secrets-manager
+    tag: "3.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8104
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  secretRef: platform-secrets
+
+marketplaceValidator:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ai-platform/marketplace-validator
+    tag: "3.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8105
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  env:
+    TRIVY_ENABLED: "true"
+
+billingEngine:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: ai-platform/billing-engine
+    tag: "3.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8101
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  secretRef: platform-billing-secrets
+
+subscriptionManager:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: ai-platform/subscription-manager
+    tag: "3.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8102
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+usageMeter:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: ai-platform/usage-meter
+    tag: "3.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8100
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  env:
+    FLUSH_INTERVAL: "30s"
+
+agentSimulationEngine:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: ai-platform/agent-simulation-engine
+    tag: "3.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8097
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  env:
+    WORKERS: "8"
+
+agentEvolutionEngine:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ai-platform/agent-evolution-engine
+    tag: "3.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8106
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+globalScheduler:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: ai-platform/global-scheduler
+    tag: "3.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8098
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  env:
+    SCHEDULE_INTERVAL: "10s"
+    HEARTBEAT_INTERVAL: "30s"
+    FAILOVER_THRESHOLD: "2m"
+
+regionController:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ai-platform/region-controller
+    tag: "3.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8099
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  env:
+    REGION_NAME: "local"
+    GLOBAL_SCHEDULER_URL: "http://global-scheduler:8098"
+
+clusterController:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ai-platform/cluster-controller
+    tag: "3.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8108
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+agentFederationNetwork:
+  enabled: false
+  replicaCount: 2
+  image:
+    repository: ai-platform/agent-federation-network
+    tag: "3.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8107
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+memoryVectorEngine:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: ai-platform/memory-vector-engine
+    tag: "3.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8103
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  secretRef: platform-openai-secrets

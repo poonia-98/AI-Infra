@@ -1,0 +1,36 @@
+apiVersion: v2
+name: ai-platform
+description: AI Agent Infrastructure Platform — enterprise-grade control plane
+type: application
+version: 1.0.0
+appVersion: "2.0.0"
+home: https://github.com/your-org/ai-platform
+keywords:
+  - ai
+  - agents
+  - platform
+  - kubernetes
+maintainers:
+  - name: Platform Engineering
+    email: platform@yourorg.com
+dependencies:
+  - name: postgresql
+    version: "15.5.1"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+  - name: redis
+    version: "19.5.2"
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled
+  - name: nats
+    version: "1.1.9"
+    repository: https://nats-io.github.io/k8s/helm/charts
+    condition: nats.enabled
+  - name: prometheus
+    version: "25.18.0"
+    repository: https://prometheus-community.github.io/helm-charts
+    condition: prometheus.enabled
+  - name: grafana
+    version: "8.0.2"
+    repository: https://grafana.github.io/helm-charts
+    condition: grafana.enabled

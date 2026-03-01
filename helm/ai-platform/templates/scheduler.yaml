@@ -1,0 +1,57 @@
+{{- if .Values.scheduler.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ai-platform.component.fullname" (dict "root" . "component" "scheduler") }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: scheduler
+spec:
+  replicas: {{ .Values.scheduler.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ai-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: scheduler
+  template:
+    metadata:
+      labels:
+        {{- include "ai-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: scheduler
+    spec:
+      containers:
+        - name: scheduler
+          image: {{ include "ai-platform.image" (dict "root" . "image" .Values.scheduler.image) }}
+          imagePullPolicy: {{ .Values.scheduler.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.scheduler.service.port }}
+          env:
+            - name: PORT
+              value: {{ .Values.scheduler.service.port | quote }}
+            - name: DATABASE_URL
+              value: {{ include "ai-platform.dbUrl" . }}
+            - name: NATS_URL
+              value: {{ .Values.global.natsUrl | quote }}
+            - name: CONTROL_PLANE_URL
+              value: {{ .Values.global.controlPlaneUrl | quote }}
+            - name: TICK_INTERVAL
+              value: {{ .Values.scheduler.env.tickIntervalSeconds | quote }}
+          resources:
+            {{- toYaml .Values.scheduler.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ai-platform.component.fullname" (dict "root" . "component" "scheduler") }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: scheduler
+spec:
+  type: {{ .Values.scheduler.service.type }}
+  selector:
+    {{- include "ai-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: scheduler
+  ports:
+    - port: {{ .Values.scheduler.service.port }}
+      targetPort: {{ .Values.scheduler.service.port }}
+      name: http
+{{- end }}

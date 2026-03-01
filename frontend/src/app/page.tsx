@@ -166,12 +166,6 @@ function KpiCard({
         <Spark data={sparks} color={active ? accent : 'var(--ink-3)'} height={26} />
       </div>
 
-      {/* ════════ FLOATING DEPLOY BUTTON ════════ */}
-      <button className="deploy-fab" onClick={() => window.location.href = '/agents'}>
-        <span style={{ fontSize: 14, lineHeight: 1 }}>+</span>
-        DEPLOY AGENT
-      </button>
-
     </div>
   );
 }
@@ -279,12 +273,6 @@ function AreaPanel({ title, icon, color, dataKey, data, unit, id: gId }: {
         )}
       </div>
 
-      {/* ════════ FLOATING DEPLOY BUTTON ════════ */}
-      <button className="deploy-fab" onClick={() => window.location.href = '/agents'}>
-        <span style={{ fontSize: 14, lineHeight: 1 }}>+</span>
-        DEPLOY AGENT
-      </button>
-
     </div>
   );
 }
@@ -339,12 +327,6 @@ function BarPanel({ title, icon, color, dataKey, data }: {
           </ResponsiveContainer>
         )}
       </div>
-
-      {/* ════════ FLOATING DEPLOY BUTTON ════════ */}
-      <button className="deploy-fab" onClick={() => window.location.href = '/agents'}>
-        <span style={{ fontSize: 14, lineHeight: 1 }}>+</span>
-        DEPLOY AGENT
-      </button>
 
     </div>
   );
@@ -461,12 +443,6 @@ function LogStream({ logs }: { logs: Log[] }) {
         <div ref={bottomRef} />
       </div>
 
-      {/* ════════ FLOATING DEPLOY BUTTON ════════ */}
-      <button className="deploy-fab" onClick={() => window.location.href = '/agents'}>
-        <span style={{ fontSize: 14, lineHeight: 1 }}>+</span>
-        DEPLOY AGENT
-      </button>
-
     </div>
   );
 }
@@ -535,7 +511,8 @@ export default function DashboardPage() {
     try {
       const [h, ags, evs, ls, als] = await Promise.all([
         api.system.health(), api.agents.list(),
-        api.events.list(60), api.logs.list(100),
+        api.observability.traces(undefined, 60),
+        api.observability.performance(undefined, '1h'),
         api.alerts.list(false),
       ]);
       setHealth(h);
@@ -951,12 +928,6 @@ export default function DashboardPage() {
         </div>
 
       </div>
-
-      {/* ════════ FLOATING DEPLOY BUTTON ════════ */}
-      <button className="deploy-fab" onClick={() => window.location.href = '/agents'}>
-        <span style={{ fontSize: 14, lineHeight: 1 }}>+</span>
-        DEPLOY AGENT
-      </button>
 
     </div>
   );

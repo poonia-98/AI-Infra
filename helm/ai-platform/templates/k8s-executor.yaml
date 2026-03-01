@@ -1,0 +1,105 @@
+{{- if .Values.k8sExecutor.enabled }}
+{{- $name := include "ai-platform.component.fullname" (dict "root" . "component" "k8s-executor") -}}
+{{- if .Values.k8sExecutor.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ default $name .Values.k8sExecutor.serviceAccount.name }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: k8s-executor
+{{- end }}
+{{- if .Values.k8sExecutor.rbac.create }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: k8s-executor
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "namespaces"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: k8s-executor
+subjects:
+  - kind: ServiceAccount
+    name: {{ default $name .Values.k8sExecutor.serviceAccount.name }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: k8s-executor
+spec:
+  replicas: {{ .Values.k8sExecutor.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ai-platform.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: k8s-executor
+  template:
+    metadata:
+      labels:
+        {{- include "ai-platform.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: k8s-executor
+    spec:
+      serviceAccountName: {{ default $name .Values.k8sExecutor.serviceAccount.name }}
+      containers:
+        - name: k8s-executor
+          image: {{ include "ai-platform.image" (dict "root" . "image" .Values.k8sExecutor.image) }}
+          imagePullPolicy: {{ .Values.k8sExecutor.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.k8sExecutor.service.port }}
+          env:
+            - name: PORT
+              value: {{ .Values.k8sExecutor.service.port | quote }}
+            - name: NATS_URL
+              value: {{ .Values.global.natsUrl | quote }}
+            - name: CONTROL_PLANE_URL
+              value: {{ .Values.global.controlPlaneUrl | quote }}
+            - name: K8S_NAMESPACE
+              value: {{ .Values.k8sExecutor.env.defaultNamespace | quote }}
+            - name: POD_TTL_SECONDS
+              value: {{ .Values.k8sExecutor.env.podTtlSeconds | quote }}
+          resources:
+            {{- toYaml .Values.k8sExecutor.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "ai-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: k8s-executor
+spec:
+  type: {{ .Values.k8sExecutor.service.type }}
+  selector:
+    {{- include "ai-platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: k8s-executor
+  ports:
+    - port: {{ .Values.k8sExecutor.service.port }}
+      targetPort: {{ .Values.k8sExecutor.service.port }}
+      name: http
+{{- end }}

@@ -1,0 +1,50 @@
+---
+# ClusterRole: grants k8s-executor permission to manage agent pods
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: k8s-executor
+  namespace: ai-platform
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ai-platform-k8s-executor
+rules:
+  # Core pod management
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/status", "pods/exec"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+  # Namespace management (for creating agent namespaces)
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create"]
+  # ConfigMaps / Secrets for agent configuration
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "create", "delete"]
+  # Events for pod lifecycle monitoring
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  # Jobs for one-shot agent executions
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
+  # Resource quotas per org namespace
+  - apiGroups: [""]
+    resources: ["resourcequotas", "limitranges"]
+    verbs: ["get", "list", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ai-platform-k8s-executor
+subjects:
+  - kind: ServiceAccount
+    name: k8s-executor
+    namespace: ai-platform
+roleRef:
+  kind: ClusterRole
+  name: ai-platform-k8s-executor
+  apiGroup: rbac.authorization.k8s.io

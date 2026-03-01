@@ -1,23 +1,31 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
 	natsgo "github.com/nats-io/nats.go"
+	"golang.org/x/time/rate"
 )
 
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 4096,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+type AccessClaims struct {
+	Sub   string `json:"sub"`
+	OrgID string `json:"org_id"`
+	Role  string `json:"role"`
+	SID   string `json:"sid"`
+	Type  string `json:"type"`
+	jwt.RegisteredClaims
 }
 
 type Client struct {
@@ -27,57 +35,6 @@ type Client struct {
 	hub     *Hub
 	agentID string
 	mu      sync.Mutex
-}
-
-func (c *Client) writePump() {
-	ticker := time.NewTicker(30 * time.Second)
-	defer func() { ticker.Stop(); c.conn.Close() }()
-	for {
-		select {
-		case msg, ok := <-c.send:
-			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if !ok {
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
-			c.mu.Lock()
-			err := c.conn.WriteMessage(websocket.TextMessage, msg)
-			c.mu.Unlock()
-			if err != nil {
-				return
-			}
-		case <-ticker.C:
-			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			c.mu.Lock()
-			err := c.conn.WriteMessage(websocket.PingMessage, nil)
-			c.mu.Unlock()
-			if err != nil {
-				return
-			}
-		}
-	}
-}
-
-func (c *Client) readPump() {
-	defer func() { c.hub.unregister <- c; c.conn.Close() }()
-	c.conn.SetReadLimit(512)
-	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-		return nil
-	})
-	for {
-		_, msg, err := c.conn.ReadMessage()
-		if err != nil {
-			break
-		}
-		var m map[string]interface{}
-		if json.Unmarshal(msg, &m) == nil {
-			if id, ok := m["agent_id"].(string); ok {
-				c.agentID = id
-			}
-		}
-	}
 }
 
 type Hub struct {
@@ -117,7 +74,9 @@ func (h *Hub) Run() {
 
 func (h *Hub) Broadcast(subject string, data interface{}, agentID string) {
 	msg, err := json.Marshal(map[string]interface{}{
-		"subject": subject, "data": data, "timestamp": time.Now().UTC().Format(time.RFC3339),
+		"subject": subject,
+		"data":    data,
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	})
 	if err != nil {
 		return
@@ -140,6 +99,57 @@ func (h *Hub) Count() int {
 	return len(h.clients)
 }
 
+func (c *Client) writePump() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer func() { ticker.Stop(); c.conn.Close() }()
+	for {
+		select {
+		case msg, ok := <-c.send:
+			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if !ok {
+				_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+			c.mu.Lock()
+			err := c.conn.WriteMessage(websocket.TextMessage, msg)
+			c.mu.Unlock()
+			if err != nil {
+				return
+			}
+		case <-ticker.C:
+			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			c.mu.Lock()
+			err := c.conn.WriteMessage(websocket.PingMessage, nil)
+			c.mu.Unlock()
+			if err != nil {
+				return
+			}
+		}
+	}
+}
+
+func (c *Client) readPump() {
+	defer func() { c.hub.unregister <- c; c.conn.Close() }()
+	c.conn.SetReadLimit(4096)
+	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	c.conn.SetPongHandler(func(string) error {
+		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
+	for {
+		_, msg, err := c.conn.ReadMessage()
+		if err != nil {
+			break
+		}
+		var m map[string]interface{}
+		if json.Unmarshal(msg, &m) == nil {
+			if id, ok := m["agent_id"].(string); ok {
+				c.agentID = id
+			}
+		}
+	}
+}
+
 func env(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
@@ -147,8 +157,105 @@ func env(k, def string) string {
 	return def
 }
 
+func parseBearer(header string) string {
+	if strings.HasPrefix(strings.ToLower(header), "bearer ") {
+		return strings.TrimSpace(header[7:])
+	}
+	return ""
+}
+
+func validateJWT(raw, secret string) (*AccessClaims, error) {
+	claims := &AccessClaims{}
+	t, err := jwt.ParseWithClaims(raw, claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(secret), nil
+	})
+	if err != nil || !t.Valid {
+		return nil, err
+	}
+	if claims.Type != "access" || claims.Sub == "" || claims.OrgID == "" || claims.Role == "" || claims.SID == "" {
+		return nil, jwt.ErrTokenInvalidClaims
+	}
+	return claims, nil
+}
+
+func normalizeOrigin(v string) string {
+	u, err := url.Parse(strings.TrimSpace(v))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return strings.ToLower(u.Scheme + "://" + u.Host)
+}
+
+func buildAllowedOrigins(raw string) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, item := range strings.Split(raw, ",") {
+		n := normalizeOrigin(item)
+		if n != "" {
+			out[n] = struct{}{}
+		}
+	}
+	return out
+}
+
+func requireWSAuth(secret string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token := parseBearer(c.GetHeader("Authorization"))
+		if token == "" {
+			token = strings.TrimSpace(c.Query("token"))
+		}
+		if token == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing token"})
+			return
+		}
+		claims, err := validateJWT(token, secret)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+			return
+		}
+		c.Set("claims", claims)
+		c.Next()
+	}
+}
+
+func requireAdmin(secret, serviceKey string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if serviceKey != "" {
+			got := c.GetHeader("X-Service-API-Key")
+			if got != "" && subtle.ConstantTimeCompare([]byte(got), []byte(serviceKey)) == 1 {
+				c.Next()
+				return
+			}
+		}
+		token := parseBearer(c.GetHeader("Authorization"))
+		if token == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing token"})
+			return
+		}
+		claims, err := validateJWT(token, secret)
+		if err != nil || claims.Role != "admin" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+			return
+		}
+		c.Next()
+	}
+}
+
 func main() {
 	natsURL := env("NATS_URL", "nats://nats:4222")
+	jwtSecret := env("JWT_SECRET", "")
+	serviceAPIKey := env("CONTROL_PLANE_API_KEY", "")
+	allowedOrigins := buildAllowedOrigins(env("ALLOWED_ORIGINS", "https://localhost:3000"))
+	broadcastLimiter := rate.NewLimiter(rate.Every(50*time.Millisecond), 20)
+
+	upgrader := websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 4096,
+		CheckOrigin: func(r *http.Request) bool {
+			origin := normalizeOrigin(r.Header.Get("Origin"))
+			_, ok := allowedOrigins[origin]
+			return ok
+		},
+	}
 
 	var nc *natsgo.Conn
 	var err error
@@ -177,7 +284,7 @@ func main() {
 	}
 	for subj, field := range subjects {
 		s, f := subj, field
-		nc.Subscribe(s, func(msg *natsgo.Msg) {
+		_, _ = nc.Subscribe(s, func(msg *natsgo.Msg) {
 			var data map[string]interface{}
 			if err := json.Unmarshal(msg.Data, &data); err != nil {
 				return
@@ -195,13 +302,17 @@ func main() {
 	r.Use(gin.Recovery())
 
 	r.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "healthy", "connections": hub.Count()})
+		c.JSON(http.StatusOK, gin.H{"status": "healthy", "connections": hub.Count()})
 	})
 
-	r.POST("/broadcast", func(c *gin.Context) {
+	r.POST("/broadcast", requireAdmin(jwtSecret, serviceAPIKey), func(c *gin.Context) {
+		if !broadcastLimiter.Allow() {
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": "rate limited"})
+			return
+		}
 		var payload map[string]interface{}
 		if err := c.ShouldBindJSON(&payload); err != nil {
-			c.JSON(400, gin.H{"error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 			return
 		}
 		subject, _ := payload["subject"].(string)
@@ -211,15 +322,22 @@ func main() {
 			agentID, _ = d["agent_id"].(string)
 		}
 		hub.Broadcast(subject, data, agentID)
-		c.JSON(200, gin.H{"ok": true, "connections": hub.Count()})
+		c.JSON(http.StatusOK, gin.H{"ok": true, "connections": hub.Count()})
 	})
 
-	r.GET("/ws", func(c *gin.Context) {
+	r.GET("/ws", requireWSAuth(jwtSecret), func(c *gin.Context) {
 		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
 			return
 		}
 		clientID := c.Query("client_id")
+		if clientID == "" {
+			if v, ok := c.Get("claims"); ok {
+				if claims, ok := v.(*AccessClaims); ok {
+					clientID = claims.Sub
+				}
+			}
+		}
 		if clientID == "" {
 			clientID = conn.RemoteAddr().String()
 		}
@@ -237,5 +355,5 @@ func main() {
 
 	port := env("PORT", "8084")
 	log.Printf("WS Gateway listening on :%s", port)
-	r.Run(":" + port)
+	_ = r.Run(":" + port)
 }

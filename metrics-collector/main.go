@@ -55,6 +55,7 @@ type Collector struct {
 	dc    *client.Client
 	nc    *natsgo.Conn
 	cpURL string
+	apiKey string
 	http  *http.Client
 }
 
@@ -150,6 +151,9 @@ func (c *Collector) persist(agentID string, cpu, memMB, memPct, netRx, netTx flo
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
+		if c.apiKey != "" {
+			req.Header.Set("X-Service-API-Key", c.apiKey)
+		}
 		resp, err := c.http.Do(req)
 		cancel()
 		if err == nil {
@@ -168,6 +172,7 @@ func getEnv(key, fallback string) string {
 func main() {
 	natsURL := getEnv("NATS_URL", "nats://nats:4222")
 	cpURL   := getEnv("CONTROL_PLANE_URL", "http://backend:8000")
+	apiKey  := getEnv("CONTROL_PLANE_API_KEY", "")
 
 	dc, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
@@ -200,6 +205,7 @@ func main() {
 
 	col := &Collector{
 		dc: dc, nc: nc, cpURL: cpURL,
+		apiKey: apiKey,
 		http: &http.Client{Timeout: 10 * time.Second},
 	}
 
